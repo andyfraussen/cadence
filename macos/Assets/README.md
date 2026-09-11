@@ -1,0 +1,7 @@
+# App icon
+
+`AppIcon.png` is the user-supplied ChatGPT-generated Cadence C artwork (1254×1254 PNG with transparency). The build script creates the complete macOS ICNS size set and bundles the original PNG for the dashboard and Settings. `CadenceBrand.menuBarIcon` in `macos/Views.swift` draws a matching monochrome C with a top rhythm notch for menu bar legibility in light and dark mode, also used as the in-app fallback.
+
+Generation prompt supplied for this direction:
+
+> Create a single macOS app icon for Cadence, an independent utility that helps developers pace their AI usage allowance. Design a bold, minimal C-shaped ring: open on the right, with softly rounded terminals and one small notch at the top suggesting a measured beat. Keep the silhouette simple and unmistakable at small sizes. No needle, speedometer ticks, arrows, or additional symbols. The mark is soft mint with restrained emerald shading, centered on a deep charcoal rounded-square tile. Use subtle satin depth and gentle lighting—not neon glow, glossy chrome, or heavy 3D effects. The overall feeling is calm, precise, and native to macOS. Centered front-on composition. The tile occupies approximately 84% of the canvas width, with balanced transparent margins. The C has generous stroke weight and ample breathing room inside the tile. Output one 1024×1024 PNG with genuine transparency outside the tile. No text, wordmark, mockup, extra objects, or resemblance to the official Cursor logo.

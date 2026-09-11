@@ -1,0 +1,42 @@
+name: Release Mac App
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  build-and-release:
+    runs-on: macos-latest
+    permissions:
+      contents: write
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Validate stable release tag and versions
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: bash macos/validate-release.sh "$RELEASE_TAG"
+
+      - name: Run release tests
+        run: bash macos/tests/release-tests.sh
+
+      - name: Run tests
+        run: bash macos/test.sh
+
+      - name: Build Universal App
+        run: bash macos/build.sh --universal
+
+      - name: Package Universal App
+        run: bash macos/package.sh
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: |
+            dist/*.zip
+            dist/*.sha256
+          draft: false
+          prerelease: false
+          generate_release_notes: true

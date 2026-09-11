@@ -1,0 +1,19 @@
+name: Checks
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+jobs:
+  test-and-build:
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test
+        run: bash macos/test.sh
+      - name: Build universal app
+        run: bash macos/build.sh --universal
