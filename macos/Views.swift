@@ -4,8 +4,7 @@ import SwiftUI
 
 enum CadenceBrand {
     static let appIcon: NSImage? = Bundle.main.url(forResource: "AppIcon", withExtension: "png").flatMap { NSImage(contentsOf: $0) }
-    // Monochrome companion to the app icon: a clean flat-cut C with a ±36°
-    // opening. No rhythm notch at menu size — it rendered as a speck.
+    // Monochrome companion to the app icon: a clean flat-cut C with a ±36° opening.
     static let menuBarIcon: NSImage = {
         let image = NSImage(size: NSSize(width: 18, height: 18), flipped: false) { _ in
             NSColor.black.setStroke()

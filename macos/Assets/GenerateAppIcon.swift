@@ -1,4 +1,4 @@
-// Cadence app-icon generator. Renders the flat black tile + white geometric C
+// Cadence app-icon generator. Renders the flat black tile + clean white geometric C
 // deterministically so builds from source need no binary artwork blobs.
 // Usage: xcrun swiftc macos/Assets/GenerateAppIcon.swift -o /tmp/cadence-icon-gen -framework AppKit
 //        /tmp/cadence-icon-gen flat macos/Assets/AppIcon.png
@@ -65,16 +65,6 @@ func draw(variant: String, out: String) {
             ctx.fillEllipse(in: CGRect(x: mx - half, y: my - half, width: half * 2, height: half * 2))
         }
     }
-
-    // contained rhythm notch: bite stays inside the band, rounded bottom
-    let outer = cy + rMid + half          // 779
-    let nw: CGFloat = 25                  // half-width 25 -> 50 wide
-    let yTop = outer - 2
-    let yBot: CGFloat = 722
-    ctx.setBlendMode(.clear)
-    ctx.fill(CGRect(x: cx - nw, y: yBot, width: nw * 2, height: yTop - yBot))
-    ctx.fillEllipse(in: CGRect(x: cx - nw, y: yBot - nw, width: nw * 2, height: nw * 2))
-    ctx.setBlendMode(.normal)
 
     img.unlockFocus()
     guard let tiff = img.tiffRepresentation,
