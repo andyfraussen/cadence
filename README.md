@@ -21,7 +21,7 @@ If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a mon
 
 **Cadence** lives quietly in your macOS menu bar. It checks your remaining allowance every minute and computes your **Safe Daily Allowance** (and optional **Weekday-Only Allowance**).
 
-![Cadence dashboard](docs/dashboard.png)
+<img src="docs/dashboard.png" width="390" alt="Cadence dashboard showing quota pools with safe daily budgets">
 
 ---
 
