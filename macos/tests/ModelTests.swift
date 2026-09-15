@@ -88,7 +88,7 @@ struct ModelTests {
         await wait { monthly.count == 1 && grok.count == 1 }
         token = "account-b"
         model.refresh()
-        precondition(model.monthly.isEmpty && model.grok == nil, "Account switch clears old balances immediately")
+        await wait { model.monthly.isEmpty && model.grok == nil }
         await wait { monthly.count == 2 && grok.count == 2 }
         monthly.complete(.success([quota]))
         grok.complete(.failure(UsageError.message("Old account error")))
@@ -114,7 +114,8 @@ struct ModelTests {
         await wait { monthly.count == 1 && grok.count == 1 }
         authFailure = true
         model.refresh()
-        precondition(model.monthly.isEmpty && model.grok == nil && !model.refreshing, "Unavailable credentials clear data and cancel requests")
+        await wait { model.monthly.isEmpty && model.grok == nil && !model.refreshing }
+        precondition(model.monthlyError != nil, "Unavailable credentials report an error")
         monthly.complete(.success([quota]))
         grok.complete(.success(quota))
         authFailure = false
@@ -126,7 +127,18 @@ struct ModelTests {
         precondition(model.monthly.first?.used == 60 && model.syncStatus() == .connected, "Authentication recovers without obsolete results")
         authFailure = true
         model.refresh()
-        precondition(model.syncStatus() == .unavailable && model.lastSuccess == nil, "Missing auth never shows healthy status")
+        await wait { model.syncStatus() == .unavailable && model.lastSuccess == nil }
+        // Backoff: the failed cycle schedules automatic-refresh backoff.
+        // refreshIfDue must skip while manual refresh still runs.
+        model.refreshIfDue()
+        precondition(!model.tokenLoading && monthly.count == 0 && grok.count == 0, "Backoff skips automatic refresh")
+        model.refresh()
+        precondition(model.tokenLoading, "Manual refresh bypasses backoff")
+        await wait { !model.refreshing }
+        // DisplayMode falls back to .both for corrupt stored values.
+        defaults.set("corrupt-value", forKey: "displayMode")
+        let fallback = AppModel(defaults: defaults, tokenLoader: { "x" })
+        precondition(fallback.displayMode == .both, "Corrupt displayMode falls back to both")
         let demo = AppModel(demo: true, defaults: defaults, tokenLoader: { preconditionFailure("Demo must not authenticate") })
         demo.refresh()
         precondition(demo.syncStatus() == .demo, "Demo status does not claim a live connection")

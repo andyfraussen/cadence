@@ -1,7 +1,11 @@
 # App icon
 
-`AppIcon.png` is the user-supplied ChatGPT-generated Cadence C artwork (1254×1254 PNG with transparency). The build script creates the complete macOS ICNS size set and bundles the original PNG for the dashboard and Settings. `CadenceBrand.menuBarIcon` in `macos/Views.swift` draws a matching monochrome C with a top rhythm notch for menu bar legibility in light and dark mode, also used as the in-app fallback.
+`AppIcon.png` is a code-rendered geometric mark (2048×2048 PNG with transparency): a flat black rounded-square tile with a white C opened on the right, flat-cut terminals, and one small contained notch at the top suggesting a measured beat. It is deliberately Cursor-adjacent in formula (monochrome tile + geometric mark) while remaining its own letter — it does not copy the official Cursor logo. The build script creates the complete macOS ICNS size set and bundles the original PNG for the dashboard and Settings. `CadenceBrand.menuBarIcon` in `macos/Views.swift` draws the same mark as a monochrome template (matching ±36° opening and flat cuts, notch omitted — at 18px it read as a speck) for menu bar legibility in light and dark mode, also used as the in-app fallback.
 
-Generation prompt supplied for this direction:
+To regenerate byte-identically from source:
 
-> Create a single macOS app icon for Cadence, an independent utility that helps developers pace their AI usage allowance. Design a bold, minimal C-shaped ring: open on the right, with softly rounded terminals and one small notch at the top suggesting a measured beat. Keep the silhouette simple and unmistakable at small sizes. No needle, speedometer ticks, arrows, or additional symbols. The mark is soft mint with restrained emerald shading, centered on a deep charcoal rounded-square tile. Use subtle satin depth and gentle lighting—not neon glow, glossy chrome, or heavy 3D effects. The overall feeling is calm, precise, and native to macOS. Centered front-on composition. The tile occupies approximately 84% of the canvas width, with balanced transparent margins. The C has generous stroke weight and ample breathing room inside the tile. Output one 1024×1024 PNG with genuine transparency outside the tile. No text, wordmark, mockup, extra objects, or resemblance to the official Cursor logo.
+```sh
+xcrun swiftc macos/Assets/GenerateAppIcon.swift -o /tmp/cadence-icon-gen -framework AppKit
+/tmp/cadence-icon-gen flat macos/Assets/AppIcon.png
+# Variants: round (rounded terminals), charcoal (softer tile)
+```

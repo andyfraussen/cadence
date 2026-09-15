@@ -1,4 +1,4 @@
-# ⚡ Cadence
+# Cadence
 
 <div align="center">
 
@@ -9,66 +9,43 @@
 [![Swift](https://img.shields.io/badge/Swift-5.9%2B-orange?logo=swift)](https://swift.org)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-*Splits your monthly or weekly Cursor quota into safe daily budgets so you never run out before your billing cycle resets.*
+*Turns your monthly or weekly Cursor quota into a safe daily budget so you can pace yourself through the billing cycle.*
 
 </div>
 
 ---
 
-## 🎯 Overview
+## Overview
 
 If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a month. Coding intensely during the first two weeks can leave you stranded on throttled speeds for the rest of your cycle.
 
-**Cadence** lives quietly in your macOS menu bar. It continuously tracks your remaining allowance and computes your **Safe Daily Allowance** (and optional **Weekday-Only Allowance**) in real time.
+**Cadence** lives quietly in your macOS menu bar. It checks your remaining allowance every minute and computes your **Safe Daily Allowance** (and optional **Weekday-Only Allowance**).
 
-```
-┌──────────────────────────────────────────────┐
-│  ⚡ Cadence                                  │
-│  A little room to keep building.             │
-├──────────────────────────────────────────────┤
-│  Cursor Models                       MONTHLY │
-│  88.0% left until reset                      │
-│  ██████████████████████████░░░░              │
-│  Safe to use / day:        3.52% of quota    │
-│  Resets 04 Oct · 25 days left                │
-├──────────────────────────────────────────────┤
-│  Other Models (Claude / GPT)         MONTHLY │
-│  86.0% left until reset                      │
-│  █████████████████████████░░░░░              │
-│  Safe to use / day:        3.44% of quota    │
-│  Resets 04 Oct · 25 days left                │
-├──────────────────────────────────────────────┤
-│  Grok Bot                             WEEKLY │
-│  98.0% left until reset                      │
-│  ████████████████████████████░░              │
-│  Safe to use / day:       14.00% of quota    │
-│  Resets 18 Sep · 7 days left                 │
-└──────────────────────────────────────────────┘
-```
+![Cadence dashboard](docs/dashboard.png)
 
 ---
 
-## ✨ Features
+## Features
 
-- **⚡ Zero Manual Setup (Auto-Sync)**: Reads your active Cursor desktop session directly from local SQLite storage. No copying tokens or pasting API keys required.
-- **📊 Independent Quota Pools**: Tracks **Cursor Models** (Composer, auto), **Other Models** (Claude 3.5 Sonnet, GPT-4o), and **Grok Bot** (weekly pool) with separate countdowns.
-- **🧮 Smart Pacing Math**:
+- **Zero Manual Setup (Auto-Sync)**: Reads your active Cursor desktop session directly from local SQLite storage. No copying tokens or pasting API keys required.
+- **Independent Quota Pools**: Tracks **Cursor Models** (Agent, auto), **Other Models** (Claude, GPT), and **Grok Bot** (weekly pool) with separate countdowns.
+- **Smart Pacing Math**:
   - **Safe Daily Budget**: Divides unused quota across local calendar dates before reset; each partial date counts once, and a reset exactly at midnight excludes that date.
   - **Workday Pacing**: Excludes weekends so you can budget for Monday–Friday workflows.
-- **🖥️ Native Menu Bar Presence**:
+- **Native Menu Bar Presence**:
   - Monochrome Cadence C icon and/or live remaining percentages directly in your menu bar.
   - Choose between: *Logo only*, *Limits only*, or *Both*.
-- **🔒 100% Private & Secure**:
+- **100% Private & Secure**:
   - All communication happens directly between your Mac and Cursor's official API (`https://api2.cursor.sh`).
   - No intermediate servers, no telemetry, no tracking, and no external dependencies.
-  - Automatic-only authentication follows Cursor's active desktop session; legacy manual-mode preferences are migrated on launch.
-- **🚀 Lightweight Native Swift**:
-  - Standalone binary (~800KB). No Electron, no Chromium, and no background Python/Node server required to run.
-  - Runs on Apple Silicon (M1/M2/M3/M4) and Intel Macs running macOS 13+.
+  - Automatic-only authentication follows Cursor's active desktop session; any legacy manual-mode preferences are removed on launch.
+- **Lightweight Native Swift**:
+  - Native binary (~600KB per architecture). No Electron, no Chromium, and no background Python/Node server required to run.
+  - Runs on Apple Silicon and Intel Macs running macOS 13+.
 
 ---
 
-## 📥 Installation
+## Installation
 
 ### Build from Source (Recommended)
 
@@ -105,7 +82,7 @@ open /Applications/Cadence.app
 
 ---
 
-### 🛡️ Why We Recommend Building from Source
+### Why We Recommend Building from Source
 
 Building from reviewed source lets you inspect the code accessing your Cursor session, without third-party runtime packages. It is not a guarantee of trust or a bypass of macOS security policy.
 
@@ -113,7 +90,7 @@ Downloaded ad-hoc builds may be blocked by Gatekeeper. Verify the source and rel
 
 ---
 
-## 📐 How the Pacing Math Works
+## How the Pacing Math Works
 
 The app does not impose arbitrary daily limits; instead, it answers: **"At what average rate can I code today without running dry before the reset?"**
 
@@ -126,21 +103,21 @@ Both modes count local calendar dates overlapping the interval from now up to, b
    $$\text{Workday Budget} = \frac{\text{Remaining } \%}{\text{Weekdays Remaining}}$$
 
 3. **Status Warnings**:
-   - 🟢 **Normal (Teal)**: Safe pace with steady reserves.
-   - 🟠 **Low (< 10%)**: Critical quota warning.
-   - ⚠️ **Stale**: Network offline or server reset passed; pacing pause to prevent misleading metrics.
+   - ⚪ **On pace**: Safe pace with steady reserves.
+   - 🔴 **Low (< 10% remaining)**: Critical quota warning.
+   - 🟠 **Stale**: Network offline, refresh failed, or server reset passed; pacing paused to prevent misleading metrics.
 
 ---
 
-## 🔒 Security & Privacy
+## Security & Privacy
 
-1. **Authentication**: Cursor stores your session token locally in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. The app queries this database in **read-only mode** (`file:...mode=ro`).
+1. **Authentication**: Cursor stores your session token locally in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. The app opens this database with `SQLITE_OPEN_READONLY` and never writes to it.
 2. **Network**: Ephemeral `URLSession` requests target `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` and `GetSandUsageStatus`. Usage is held in memory only. Hidden Grok does not refresh; visible pools publish independently.
 3. **Legacy tokens**: Manual-token authentication is no longer supported. Old Cadence Keychain entries are neither read nor deleted; you may remove the `dev.fraussen.cadence` / `cursor-session` entry yourself in Keychain Access.
 
 ---
 
-## 📄 License & Disclaimer
+## License & Disclaimer
 
 This project is open-source under the [MIT License](LICENSE).
 

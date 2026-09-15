@@ -21,13 +21,13 @@ When publishing on GitHub, avoid leading with "Cursor" as the main trademark to 
 ### 2. Logo & App Icon Concepts
 
 #### Visual Motif
-Cadence uses a soft mint C-shaped ring on a charcoal rounded-square tile, with rounded terminals and a small top rhythm notch. The user-supplied artwork is shared by the macOS app icon, dashboard, and Settings.
+Cadence uses a flat black rounded-square tile with a white geometric C: flat-cut terminals, an opening on the right, and a small contained rhythm notch at the top. The code-rendered artwork is shared by the macOS app icon, dashboard, and Settings.
 
-#### Artwork and Generation Prompt
-See `macos/Assets/README.md` for the supplied artwork's provenance and generation prompt. The build produces all required macOS icon sizes from `macos/Assets/AppIcon.png`.
+#### Artwork and Regeneration
+See `macos/Assets/README.md` for provenance and the regeneration command (`macos/Assets/GenerateAppIcon.swift` reproduces `AppIcon.png` byte-identically). The build produces all required macOS icon sizes from `macos/Assets/AppIcon.png`.
 
 #### Menu Bar Icon
-- `CadenceBrand.menuBarIcon` in `macos/Views.swift` renders the matching notched C as a monochrome template in light and dark mode, without shrinking the full tile.
+- `CadenceBrand.menuBarIcon` in `macos/Views.swift` draws the same mark (matching ±36° opening and flat cuts, notch omitted at menu size) as a monochrome template in light and dark mode, without shrinking the full tile.
 
 ---
 

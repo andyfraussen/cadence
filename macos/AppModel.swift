@@ -3,14 +3,18 @@ import SwiftUI
 
 @MainActor
 final class AppModel: ObservableObject {
+    enum DisplayMode: String, CaseIterable {
+        case both, limits, logo
+    }
     @Published var monthly: [Quota] = []
     @Published var grok: Quota?
     @Published var monthlyError: String?
     @Published var grokError: String?
     @Published private(set) var monthlyRefreshing = false
     @Published private(set) var grokRefreshing = false
-    var refreshing: Bool { monthlyRefreshing || grokRefreshing }
-    @Published var displayMode: String { didSet { defaults.set(displayMode, forKey: "displayMode"); onDisplayChange?() } }
+    @Published private(set) var tokenLoading = false
+    var refreshing: Bool { monthlyRefreshing || grokRefreshing || tokenLoading }
+    @Published var displayMode: DisplayMode { didSet { defaults.set(displayMode.rawValue, forKey: "displayMode"); onDisplayChange?() } }
     @Published var showGrok: Bool {
         didSet {
             defaults.set(showGrok, forKey: "showGrok")
@@ -28,14 +32,17 @@ final class AppModel: ObservableObject {
     private var grokGeneration = 0
     private var monthlyTask: Task<Void, Never>?
     private var grokTask: Task<Void, Never>?
+    private var tokenTask: Task<Void, Never>?
     private var lastToken: String?
+    private var consecutiveFailures = 0
+    private var backoffUntil: Date?
     private let demo: Bool
-    private let tokenLoader: () throws -> String
+    private let tokenLoader: () async throws -> String
     private let monthlyLoader: (String) async throws -> [Quota]
     private let grokLoader: (String) async throws -> Quota
 
     init(demo: Bool = false, defaults: UserDefaults? = nil,
-         tokenLoader: @escaping () throws -> String = Authentication.automaticToken,
+         tokenLoader: @escaping () async throws -> String = { try await Authentication.automaticToken() },
          monthlyLoader: @escaping (String) async throws -> [Quota] = { try UsageParser.monthly(await CursorAPI.fetch("GetCurrentPeriodUsage", token: $0)) },
          grokLoader: @escaping (String) async throws -> Quota = { try UsageParser.grok(await CursorAPI.fetch("GetSandUsageStatus", token: $0)) }) {
         self.demo = demo
@@ -46,7 +53,7 @@ final class AppModel: ObservableObject {
         let defaults = self.defaults
         defaults.removeObject(forKey: "authMode")
         defaults.removeObject(forKey: "authSource")
-        displayMode = defaults.string(forKey: "displayMode") ?? "both"
+        displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "both") ?? .both
         showGrok = defaults.object(forKey: "showGrok") as? Bool ?? true
         workdaysOnly = defaults.bool(forKey: "workdaysOnly")
         if demo {
@@ -64,6 +71,8 @@ final class AppModel: ObservableObject {
 
     private func invalidate() {
         generation += 1
+        tokenTask?.cancel(); tokenTask = nil
+        tokenLoading = false
         monthlyTask?.cancel(); monthlyTask = nil
         monthlyRefreshing = false
         cancelGrok()
@@ -77,46 +86,109 @@ final class AppModel: ObservableObject {
         grokRefreshing = false
     }
 
+    /// Manual refresh. Always runs; used by popover open, Retry, and auth changes.
     func refresh() {
         guard !demo else { onDisplayChange?(); return }
-        do {
-            let token = try tokenLoader()
-            // Never show a previous account's balance after Cursor switches accounts.
-            if lastToken != token { invalidate() }
-            lastToken = token
-            let current = generation
-            if !monthlyRefreshing {
-                monthlyRefreshing = true
-                monthlyTask = Task {
-                    let result = await fetchMonthly(token)
-                    guard generation == current else { return }
-                    switch result {
-                    case .success(let quotas): monthly = quotas; monthlyError = nil
-                    case .failure(let error): monthlyError = error.localizedDescription
-                    }
-                    monthlyRefreshing = false; monthlyTask = nil
-                    onDisplayChange?()
-                }
-            }
-            if showGrok && !grokRefreshing {
-                grokRefreshing = true
-                let request = grokGeneration
-                grokTask = Task {
-                    let result = await fetchGrok(token)
-                    guard generation == current, grokGeneration == request else { return }
-                    switch result {
-                    case .success(let quota): grok = quota; grokError = nil
-                    case .failure(let error): grokError = error.localizedDescription
-                    }
-                    grokRefreshing = false; grokTask = nil
-                    onDisplayChange?()
-                }
-            }
-        } catch {
-            invalidate()
-            monthlyError = error.localizedDescription; grokError = error.localizedDescription
-        }
+        // Debounce concurrent token loads; fetch tasks debounce individually below.
+        guard tokenTask == nil else { onDisplayChange?(); return }
+        tokenLoading = true
         onDisplayChange?()
+        let current = generation
+        tokenTask = Task {
+            let tokenResult: Result<String, Error>
+            do { tokenResult = .success(try await tokenLoader()) }
+            catch { tokenResult = .failure(error) }
+            guard generation == current, !Task.isCancelled else { return }
+            tokenTask = nil
+            tokenLoading = false
+            switch tokenResult {
+            case .success(let token):
+                // Never show a previous account's balance after Cursor switches accounts.
+                if lastToken != token { invalidateAfterToken(current: current); lastToken = token }
+                else { lastToken = token }
+                startFetches(token: token, generation: generation)
+            case .failure(let error):
+                invalidateAfterToken(current: current)
+                monthlyError = error.localizedDescription; grokError = error.localizedDescription
+                noteCycleFinished()
+            }
+            onDisplayChange?()
+        }
+    }
+
+    /// Automatic refresh for the 60s timer. Skips while in exponential backoff
+    /// so an offline or failing backend does not hammer the API.
+    func refreshIfDue(at now: Date = Date()) {
+        if let until = backoffUntil, now < until { updateMenuBarOnly(); return }
+        refresh()
+    }
+
+    private func updateMenuBarOnly() { onDisplayChange?() }
+
+    private func invalidateAfterToken(current: Int) {
+        // Token changed or failed: drop stale balances without cancelling the
+        // just-finished token task (already nil) but cancel in-flight fetches
+        // from the previous account.
+        _ = current
+        generation += 1
+        monthlyTask?.cancel(); monthlyTask = nil
+        monthlyRefreshing = false
+        cancelGrok()
+        monthly = []; grok = nil; monthlyError = nil; grokError = nil
+        lastToken = nil
+    }
+
+    private func startFetches(token: String, generation current: Int) {
+        if !monthlyRefreshing {
+            monthlyRefreshing = true
+            monthlyTask = Task {
+                let result = await fetchMonthly(token)
+                guard generation == current else { return }
+                switch result {
+                case .success(let quotas): monthly = quotas; monthlyError = nil
+                case .failure(let error): monthlyError = error.localizedDescription
+                }
+                monthlyRefreshing = false; monthlyTask = nil
+                noteCycleFinished()
+                onDisplayChange?()
+            }
+        }
+        if showGrok && !grokRefreshing {
+            grokRefreshing = true
+            let request = grokGeneration
+            grokTask = Task {
+                let result = await fetchGrok(token)
+                guard generation == current, grokGeneration == request else { return }
+                switch result {
+                case .success(let quota): grok = quota; grokError = nil
+                case .failure(let error): grokError = error.localizedDescription
+                }
+                grokRefreshing = false; grokTask = nil
+                noteCycleFinished()
+                onDisplayChange?()
+            }
+        }
+        // Token-only refresh with nothing to fetch (hidden Grok, monthly already
+        // refreshing) still needs a display update; cycle accounting happens on
+        // pool completion.
+        onDisplayChange?()
+    }
+
+    private func noteCycleFinished() {
+        // Evaluate once the cycle is idle. Full success clears backoff;
+        // any visible error schedules exponential backoff (60s, 120s, 240s… cap 15m).
+        guard tokenTask == nil, !monthlyRefreshing, !grokRefreshing else { return }
+        let hasError = monthlyError != nil || (showGrok && grokError != nil)
+        // No data and no error (e.g. hidden Grok, nothing started) is not a failure.
+        let hasData = !monthly.isEmpty || (showGrok && grok != nil)
+        if hasError {
+            consecutiveFailures += 1
+            let delay = min(900.0, 60.0 * pow(2.0, Double(max(0, consecutiveFailures - 1))))
+            backoffUntil = Date().addingTimeInterval(delay)
+        } else if hasData {
+            consecutiveFailures = 0
+            backoffUntil = nil
+        }
     }
 
     private func fetchMonthly(_ token: String) async -> Result<[Quota], Error> {

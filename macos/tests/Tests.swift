@@ -1,4 +1,5 @@
 import Foundation
+import SQLite3
 
 @main
 struct Tests {
@@ -83,9 +84,27 @@ struct Tests {
         check(week.safePerDay(at: now, workdaysOnly: true, calendar: calendar) == 50.0 / 6, "Partial-weekday pacing")
         let fullWeek = Quota(id: "C", name: "Full week", used: 50, reset: midnight.addingTimeInterval(7 * 86400), updated: midnight)
         check(fullWeek.daysLeft(at: midnight, workdaysOnly: true, calendar: calendar) == 5, "Five weekdays in a midnight-to-midnight week")
+        // Far-future resets are rejected as malformed instead of producing tiny allowances.
+        let farMonthlyMs = Int64((now.timeIntervalSince1970 + 400 * 86400) * 1000)
+        rejects("{\"billingCycleEnd\":\(farMonthlyMs),\"planUsage\":{\"autoPercentUsed\":10,\"apiPercentUsed\":10}}")
+        let farGrokDate = ISO8601DateFormatter().string(from: now.addingTimeInterval(100 * 86400))
+        rejects("{\"usagePercent\":10,\"nextResetTimestampUtc\":\"\(farGrokDate)\"}", grok: true)
+        // O(1) long-range pacing: 400-day window completes without looping to reset.
+        let longReset = now.addingTimeInterval(400 * 86400)
+        let longQuota = Quota(id: "C", name: "Long", used: 50, reset: longReset, updated: now)
+        let longDays = longQuota.daysLeft(at: now, calendar: calendar)
+        check(longDays > 390 && longDays <= 402, "Long-range calendar count is bounded and sane")
+        let longWeekdays = longQuota.daysLeft(at: now, workdaysOnly: true, calendar: calendar)
+        check(longWeekdays > 0 && longWeekdays < longDays, "Long-range weekday count is a proper subset")
+        // Token cleaning: trim whitespace and unwrap JSON-quoted storage values.
+        check((try? Authentication.cleanToken("  abc123  ")) == "abc123", "Token whitespace is trimmed")
+        check((try? Authentication.cleanToken("\"abc123\"")) == "abc123", "JSON-quoted token is unwrapped")
+        do { _ = try Authentication.cleanToken("   "); preconditionFailure("Blank token was accepted") } catch { assertions += 1 }
+        do { _ = try Authentication.cleanToken("\"\""); preconditionFailure("Empty quoted token was accepted") } catch { assertions += 1 }
+        try checkSQLiteFixture()
         print("Passed \(assertions) parser and pacing checks.")
         if CommandLine.arguments.contains("--live") {
-            let token = try Authentication.automaticToken()
+            let token = try await Authentication.automaticToken()
             let liveMonthly = try UsageParser.monthly(await CursorAPI.fetch("GetCurrentPeriodUsage", token: token))
             let liveGrok = try UsageParser.grok(await CursorAPI.fetch("GetSandUsageStatus", token: token))
             for quota in liveMonthly + [liveGrok] {
@@ -93,5 +112,24 @@ struct Tests {
             }
             print("Live Swift API checks passed. No credentials printed or persisted.")
         }
+    }
+
+    /// Temporary SQLite fixture: verifies readToken against a real database file
+    /// without touching the user's Cursor install.
+    static func checkSQLiteFixture() throws {
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cadence-test-\(UUID().uuidString).vscdb").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        var db: OpaquePointer?
+        precondition(sqlite3_open(path, &db) == SQLITE_OK, "Fixture database opens")
+        defer { sqlite3_close(db) }
+        precondition(sqlite3_exec(db, "CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value TEXT)", nil, nil, nil) == SQLITE_OK, "Fixture table creates")
+        precondition(sqlite3_exec(db, "INSERT INTO ItemTable(key, value) VALUES('cursorAuth/accessToken', '\"fixture-token-123\"')", nil, nil, nil) == SQLITE_OK, "Fixture token inserts")
+        let token = try Authentication.readToken(at: path)
+        precondition(token == "fixture-token-123", "JSON-quoted fixture token is unwrapped")
+        do {
+            _ = try Authentication.readToken(at: path + ".missing")
+            preconditionFailure("Missing database was accepted")
+        } catch { }
     }
 }

@@ -1,8 +1,9 @@
 import AppKit
+import Network
 import SwiftUI
 
 @MainActor
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private let demo = CommandLine.arguments.contains("--demo")
     private lazy var model = AppModel(demo: demo)
     private var item: NSStatusItem!
@@ -10,6 +11,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var settingsWindow: NSWindow?
     private var previewWindow: NSWindow?
     private var timer: Timer?
+    private var popoverMonitors: [Any] = []
+    private let pathMonitor = NWPathMonitor()
+    private var isOffline = false
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -17,14 +21,30 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         item.button?.target = self
         item.button?.action = #selector(togglePopover)
         popover.behavior = .transient
+        popover.delegate = self
         configurePopover()
         model.onDisplayChange = { [weak self] in self?.updateMenuBar() }
         updateMenuBar()
         model.refresh()
-        timer = Timer.scheduledTimer(withTimeInterval: 60, repeats: true) { [weak self] _ in
-            Task { @MainActor in self?.updateMenuBar(); self?.model.refresh() }
+        let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
+            Task { @MainActor in
+                guard let self else { return }
+                self.updateMenuBar()
+                // Offline pause: age the display without hammering the API.
+                // Backoff for consecutive failures is enforced in refreshIfDue.
+                if self.isOffline { return }
+                self.model.refreshIfDue()
+            }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
+        pathMonitor.pathUpdateHandler = { [weak self] path in
+            let offline = path.status != .satisfied
+            Task { @MainActor in self?.isOffline = offline }
+        }
+        pathMonitor.start(queue: DispatchQueue(label: "dev.fraussen.cadence.net"))
         NSWorkspace.shared.notificationCenter.addObserver(self, selector: #selector(woke), name: NSWorkspace.didWakeNotification, object: nil)
+        NotificationCenter.default.addObserver(self, selector: #selector(appResignedActive), name: NSApplication.didResignActiveNotification, object: nil)
         if CommandLine.arguments.contains("--settings") { showSettings() }
         if CommandLine.arguments.contains("--preview") {
             let window = NSWindow(contentViewController: NSHostingController(rootView: dashboard))
@@ -56,28 +76,64 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func updateMenuBar() {
         guard let button = item.button else { return }
-        button.title = model.displayMode == "logo" ? (model.hasProblem ? "!" : "") : model.toolbarTitle
-        button.image = model.displayMode == "limits" ? nil : CadenceBrand.menuBarIcon
+        button.title = model.displayMode == .logo ? (model.hasProblem ? "!" : "") : model.toolbarTitle
+        button.image = model.displayMode == .limits ? nil : CadenceBrand.menuBarIcon
         button.imagePosition = .imageLeading
-        button.toolTip = "\(model.toolbarTitle) remaining. C: Cursor Models, O: Other Models, G: Grok Bot. Click to open Cadence."
+        let status = model.hasProblem ? " — attention: click for details." : ". Click to open Cadence."
+        button.toolTip = "\(model.toolbarTitle) remaining. C: Cursor Models, O: Other Models, G: Grok Bot\(status)"
         button.setAccessibilityLabel("Cadence")
         button.setAccessibilityValue(model.toolbarTitle + " remaining")
         configurePopover()
     }
 
     @objc private func togglePopover() {
-        if popover.isShown { popover.performClose(nil) }
-        else if let button = item.button {
-            configurePopover()
-            model.refresh()
-            popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
-            NSApp.activate(ignoringOtherApps: true)
-        }
+        if popover.isShown { closePopover() }
+        else if let button = item.button { showPopover(from: button) }
     }
     @objc private func woke() { updateMenuBar(); model.refresh() }
+    @objc private func appResignedActive() { closePopover() }
+
+    func applicationWillTerminate(_ notification: Notification) {
+        stopPopoverMonitors()
+        pathMonitor.cancel()
+    }
+
+    func popoverDidClose(_ notification: Notification) {
+        stopPopoverMonitors()
+    }
+
+    private func showPopover(from button: NSStatusBarButton) {
+        configurePopover()
+        model.refresh()
+        popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
+        NSApp.activate(ignoringOtherApps: true)
+        startPopoverMonitors()
+    }
+
+    private func closePopover() {
+        stopPopoverMonitors()
+        if popover.isShown { popover.performClose(nil) }
+    }
+
+    private func startPopoverMonitors() {
+        stopPopoverMonitors()
+        // Backup for outside clicks AppKit doesn't route to the transient
+        // popover (common for menu-bar extras): any click in another process
+        // closes it. Clicks inside our popover never reach this monitor.
+        popoverMonitors.append(
+            NSEvent.addGlobalMonitorForEvents(matching: [.leftMouseDown, .rightMouseDown]) { [weak self] _ in
+                Task { @MainActor in self?.closePopover() }
+            } as Any
+        )
+    }
+
+    private func stopPopoverMonitors() {
+        for monitor in popoverMonitors { NSEvent.removeMonitor(monitor) }
+        popoverMonitors.removeAll()
+    }
 
     private func showSettings() {
-        popover.performClose(nil)
+        closePopover()
         if settingsWindow == nil {
             let window = NSWindow(contentViewController: NSHostingController(rootView: SettingsView(model: model)))
             window.title = "Cadence Settings"

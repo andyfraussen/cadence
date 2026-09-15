@@ -18,4 +18,12 @@ if [[ "$version" != "$bundle_version" || "$version" != "$package_version" ]]; th
     "$version" "$bundle_version" "$package_version" >&2
   exit 1
 fi
+if ! grep -q "^# Cadence $version\$" macos/SHARING.md; then
+  printf 'SHARING.md title must be "# Cadence %s" to match the release tag.\n' "$version" >&2
+  exit 1
+fi
+if ! grep -q "Cadence-$version-universal.zip" macos/SHARING.md; then
+  printf 'SHARING.md must reference the Cadence-%s-universal.zip checksum filename.\n' "$version" >&2
+  exit 1
+fi
 printf 'Validated stable release %s.\n' "$tag"

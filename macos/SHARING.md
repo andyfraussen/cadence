@@ -18,7 +18,7 @@ Cadence automatically detects and reads your active Cursor desktop app session f
 ## Read the numbers
 
 - **Left until reset:** total unused percentage of the included allowance.
-- **Safe to use / day:** that remaining percentage divided by remaining days, as a percentage of the full quota.
+- **Safe per day:** that remaining percentage divided by remaining days, as a percentage of the full quota.
 - **Example:** 80% left over 20 days means an average of 4% of the full quota per day from now until reset.
 - It is a pacing estimate, not a separate daily cap or a measurement of today's spending. It does not include or limit on-demand charges.
 - Both pacing modes count local calendar dates overlapping the interval from now until reset, excluding the reset endpoint. Partial dates count once; daylight-saving transitions do not add or remove dates. Weekday mode assumes no weekend usage and excludes weekends but not holidays.

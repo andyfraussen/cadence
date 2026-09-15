@@ -11,7 +11,7 @@ cp macos/package.sh "$fixture/macos/"
 cp macos/Info.plist "$fixture/macos/Info.plist"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 1.2.3' "$fixture/macos/Info.plist"
 cp "$fixture/macos/Info.plist" "$fixture/dist/Cadence.app/Contents/Info.plist"
-printf 'Test sharing instructions.\n' > "$fixture/macos/SHARING.md"
+printf '# Cadence 1.2.3\n\nTest sharing instructions Cadence-1.2.3-universal.zip.\n' > "$fixture/macos/SHARING.md"
 printf '{"version":"1.2.3"}\n' > "$fixture/package.json"
 printf 'int main(void) { return 0; }\n' > "$work/main.c"
 xcrun clang -arch arm64 -arch x86_64 -mmacosx-version-min=13.0 "$work/main.c" \
@@ -47,6 +47,7 @@ fi
 printf 'PASS: failed packaging cleans staging directories.\n'
 
 cp "$root/macos/validate-release.sh" "$fixture/macos/"
+printf '# Cadence 1.2.3\n\nTest sharing instructions Cadence-1.2.3-universal.zip.\n' > "$fixture/macos/SHARING.md"
 checks=0
 expect_tag() {
   local expected="$1" tag="$2" status=0
@@ -72,9 +73,15 @@ expect_tag fail v1.2.3
 for version in 0.0.0 10.20.300; do
   printf '{"version":"%s"}\n' "$version" > "$fixture/package.json"
   /usr/libexec/PlistBuddy -c "Set :CFBundleShortVersionString $version" "$fixture/macos/Info.plist"
+  printf '# Cadence %s\n\nTest sharing instructions Cadence-%s-universal.zip.\n' "$version" "$version" > "$fixture/macos/SHARING.md"
   expect_tag pass "v$version"
 done
+printf '# Cadence 1.2.3\n\nTest sharing instructions Cadence-1.2.3-universal.zip.\n' > "$fixture/macos/SHARING.md"
 printf '{"version":"01.2.3"}\n' > "$fixture/package.json"
 /usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 01.2.3' "$fixture/macos/Info.plist"
 expect_tag fail v01.2.3
+printf '{"version":"1.2.3"}\n' > "$fixture/package.json"
+/usr/libexec/PlistBuddy -c 'Set :CFBundleShortVersionString 1.2.3' "$fixture/macos/Info.plist"
+printf '# Cadence 9.9.9\n\nStale sharing instructions.\n' > "$fixture/macos/SHARING.md"
+expect_tag fail v1.2.3
 printf 'PASS: %s release tag checks.\n' "$checks"
