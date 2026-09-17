@@ -101,6 +101,39 @@ struct Tests {
         check((try? Authentication.cleanToken("\"abc123\"")) == "abc123", "JSON-quoted token is unwrapped")
         do { _ = try Authentication.cleanToken("   "); preconditionFailure("Blank token was accepted") } catch { assertions += 1 }
         do { _ = try Authentication.cleanToken("\"\""); preconditionFailure("Empty quoted token was accepted") } catch { assertions += 1 }
+        // Remaining time formatting: same-day hours/minutes and multi-day pluralization
+        let sameDayQuota = Quota(id: "G", name: "Grok", used: 63.1, reset: now.addingTimeInterval(4 * 3600 + 33 * 60 + 15), updated: now)
+        check(sameDayQuota.resetRemainingText(at: now, calendar: calendar) == "4 hours and 34 minutes left", "Same-day hours and minutes")
+        check(sameDayQuota.resetRemainingText(at: now, workdaysOnly: true, calendar: calendar) == "4 hours and 34 minutes left", "Same-day respects hour format with workdaysOnly")
+
+        let exactHourQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(2 * 3600), updated: now)
+        check(exactHourQuota.resetRemainingText(at: now, calendar: calendar) == "2 hours left", "Exact hours plural")
+
+        let oneHourQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(3600), updated: now)
+        check(oneHourQuota.resetRemainingText(at: now, calendar: calendar) == "1 hour left", "Exact 1 hour singular")
+
+        let oneHourOneMinQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(3660), updated: now)
+        check(oneHourOneMinQuota.resetRemainingText(at: now, calendar: calendar) == "1 hour and 1 minute left", "1 hour and 1 minute singulars")
+
+        let minutesQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(34 * 60), updated: now)
+        check(minutesQuota.resetRemainingText(at: now, calendar: calendar) == "34 minutes left", "Minutes only plural")
+
+        let oneMinQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(60), updated: now)
+        check(oneMinQuota.resetRemainingText(at: now, calendar: calendar) == "1 minute left", "1 minute singular")
+
+        let subMinuteQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(15), updated: now)
+        check(subMinuteQuota.resetRemainingText(at: now, calendar: calendar) == "< 1 minute left", "Under one minute left")
+
+        let pastQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(-10), updated: now)
+        check(pastQuota.resetRemainingText(at: now, calendar: calendar) == "0 days left", "Past reset returns 0 days left")
+        check(pastQuota.resetRemainingText(at: now, workdaysOnly: true, calendar: calendar) == "0 weekdays left", "Past reset returns 0 weekdays left")
+
+        let tomorrowMidnight = midnight.addingTimeInterval(86400)
+        let oneDayQuota = Quota(id: "C", name: "Cursor", used: 10, reset: tomorrowMidnight, updated: now)
+        check(oneDayQuota.resetRemainingText(at: now, calendar: calendar) == "1 day left", "1 day singular")
+        check(fullDays.resetRemainingText(at: midnight, calendar: calendar) == "20 days left", "Multi-day plural")
+        check(fullWeek.resetRemainingText(at: midnight, workdaysOnly: true, calendar: calendar) == "5 weekdays left", "Multi-weekday plural")
+
         try checkSQLiteFixture()
         print("Passed \(assertions) parser and pacing checks.")
         if CommandLine.arguments.contains("--live") {

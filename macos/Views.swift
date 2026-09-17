@@ -139,8 +139,7 @@ struct QuotaCard: View {
         let stale = isStale(now: now)
         let accent = accent(now: now)
         let safe = stale ? nil : quota.safePerDay(at: now, workdaysOnly: workdaysOnly)
-        let days = quota.daysLeft(at: now, workdaysOnly: workdaysOnly)
-        let unit = workdaysOnly ? "weekdays left" : "days left"
+        let remaining = quota.resetRemainingText(at: now, workdaysOnly: workdaysOnly)
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 7) {
                 Circle().fill(accent).frame(width: 7, height: 7)
@@ -174,7 +173,7 @@ struct QuotaCard: View {
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
-            Text("Resets \(quota.reset.formatted(date: .abbreviated, time: .shortened)) · \(days) \(unit)")
+            Text("Resets \(quota.reset.formatted(date: .abbreviated, time: .shortened)) · \(remaining)")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             if let failure {
                 Text(failure).font(.system(size: 12)).foregroundStyle(.orange).fixedSize(horizontal: false, vertical: true)

@@ -56,6 +56,38 @@ struct Quota: Identifiable {
         let days = daysLeft(at: now, workdaysOnly: workdaysOnly, calendar: calendar)
         return days > 0 ? remaining / Double(days) : nil
     }
+
+    func resetRemainingText(at now: Date = Date(), workdaysOnly: Bool = false, calendar: Calendar = .current) -> String {
+        guard reset > now else {
+            let unit = workdaysOnly ? "weekdays left" : "days left"
+            return "0 \(unit)"
+        }
+        if calendar.isDate(now, inSameDayAs: reset) {
+            let diff = reset.timeIntervalSince(now)
+            if diff < 60 {
+                return "< 1 minute left"
+            }
+            let totalMinutes = Int(ceil(diff / 60.0))
+            let hours = totalMinutes / 60
+            let minutes = totalMinutes % 60
+            if hours > 0 && minutes > 0 {
+                let hUnit = hours == 1 ? "hour" : "hours"
+                let mUnit = minutes == 1 ? "minute" : "minutes"
+                return "\(hours) \(hUnit) and \(minutes) \(mUnit) left"
+            } else if hours > 0 {
+                let hUnit = hours == 1 ? "hour" : "hours"
+                return "\(hours) \(hUnit) left"
+            } else {
+                let mUnit = totalMinutes == 1 ? "minute" : "minutes"
+                return "\(totalMinutes) \(mUnit) left"
+            }
+        }
+        let days = daysLeft(at: now, workdaysOnly: workdaysOnly, calendar: calendar)
+        let unit = workdaysOnly
+            ? (days == 1 ? "weekday left" : "weekdays left")
+            : (days == 1 ? "day left" : "days left")
+        return "\(days) \(unit)"
+    }
 }
 
 enum UsageParser {
