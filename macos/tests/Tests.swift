@@ -134,6 +134,89 @@ struct Tests {
         check(fullDays.resetRemainingText(at: midnight, calendar: calendar) == "20 days left", "Multi-day plural")
         check(fullWeek.resetRemainingText(at: midnight, workdaysOnly: true, calendar: calendar) == "5 weekdays left", "Multi-weekday plural")
 
+        // Fixed morning budget: stable all day, redistributes tomorrow.
+        // Spec example: 2.1% used / 3.5% budget leaves 1.4% available;
+        // 0.7% over budget is explicit and red.
+        let morning = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 8))!
+        let afternoon = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 18))!
+        let nextMorning = calendar.date(from: DateComponents(year: 2026, month: 9, day: 18, hour: 8))!
+        let morningStart = calendar.startOfDay(for: morning)
+        let budgetReset = morningStart.addingTimeInterval(20 * 86400)
+        func close(_ a: Double?, _ b: Double, _ name: String) {
+            guard let a, abs(a - b) < 0.000001 else { preconditionFailure("\(name): \(String(describing: a)) != \(b)") }
+            assertions += 1
+        }
+        check(DailyPacing.dayKey(for: morning, calendar: calendar) == "2026-09-17", "Day key is local yyyy-MM-dd")
+        check(DailyPacing.dayKey(for: nextMorning, calendar: calendar) == "2026-09-18", "Day key rolls at midnight")
+        let morningQuota = Quota(id: "C", name: "Cursor", used: 30, reset: budgetReset, updated: morning)
+        var anchor = DailyPacing.nextAnchor(for: morningQuota, now: morning, existing: nil, calendar: calendar)
+        check(anchor.day == "2026-09-17" && anchor.startUsed == 30 && anchor.startRemaining == 70, "First snapshot freezes morning baseline")
+        check(anchor.lastUsed == 30 && anchor.lastDay == "2026-09-17", "First snapshot tracks last observation")
+        let morningInfo = morningQuota.dailyInfo(at: morning, anchor: anchor, calendar: calendar)
+        close(morningInfo.budget, 3.5, "Morning budget is remaining/days")
+        check(morningInfo.usedToday == 0, "Morning spend starts at zero")
+        close(morningInfo.available, 3.5, "Morning availability equals budget")
+        check(!morningInfo.isOver && !morningInfo.isWarning, "Fresh morning is on pace")
+        // Afternoon: same baseline, budget steady, spend grows.
+        let afternoonQuota = Quota(id: "C", name: "Cursor", used: 32.1, reset: budgetReset, updated: afternoon)
+        let sameDay = DailyPacing.nextAnchor(for: afternoonQuota, now: afternoon, existing: anchor, calendar: calendar)
+        check(sameDay.day == "2026-09-17" && sameDay.startUsed == 30 && sameDay.startRemaining == 70, "Intraday refresh keeps morning baseline")
+        check(sameDay.lastUsed == 32.1, "Intraday refresh tracks last usage")
+        let dayInfo = afternoonQuota.dailyInfo(at: afternoon, anchor: sameDay, calendar: calendar)
+        close(dayInfo.budget, 3.5, "Budget holds steady while spending")
+        check(abs(dayInfo.usedToday - 2.1) < 0.000001, "Today's spend is delta from morning")
+        close(dayInfo.available, 1.4, "Available is budget minus spend")
+        check(dayInfo.overBy == nil && !dayInfo.isOver, "Under budget is not over")
+        close(dayInfo.fraction, 0.6, "Progress is spend/budget")
+        // Warning at 80% and over-budget state.
+        let warnQuota = Quota(id: "C", name: "Cursor", used: 32.8, reset: budgetReset, updated: afternoon)
+        let warnInfo = warnQuota.dailyInfo(at: afternoon, anchor: sameDay, calendar: calendar)
+        check(warnInfo.isWarning && !warnInfo.isOver, "80% of budget turns amber")
+        let okQuota = Quota(id: "C", name: "Cursor", used: 32.79, reset: budgetReset, updated: afternoon)
+        check(!okQuota.dailyInfo(at: afternoon, anchor: sameDay, calendar: calendar).isWarning, "Below 80% stays neutral")
+        let overQuota = Quota(id: "C", name: "Cursor", used: 34.2, reset: budgetReset, updated: afternoon)
+        let overInfo = overQuota.dailyInfo(at: afternoon, anchor: sameDay, calendar: calendar)
+        close(overInfo.overBy, 0.7, "Overage is explicit")
+        check(overInfo.isOver && !overInfo.isWarning, "Over budget is red, not amber")
+        check((overInfo.fraction ?? 0) > 1, "Over-budget fraction exceeds one")
+        // Next morning: overnight spend carries, savings/overspend redistribute.
+        anchor = sameDay
+        let carryQuota = Quota(id: "C", name: "Cursor", used: 33.0, reset: budgetReset, updated: nextMorning)
+        let nextAnchor = DailyPacing.nextAnchor(for: carryQuota, now: nextMorning, existing: anchor, calendar: calendar)
+        check(nextAnchor.day == "2026-09-18" && abs(nextAnchor.startUsed - 32.1) < 0.000001, "Overnight baseline carries last observation")
+        check(abs(nextAnchor.startRemaining - 67.9) < 0.000001, "Morning balance is pre-spend quota")
+        let nextInfo = carryQuota.dailyInfo(at: nextMorning, anchor: nextAnchor, calendar: calendar)
+        check(abs(nextInfo.usedToday - 0.9) < 0.000001, "Overnight spend counts toward today")
+        close(nextInfo.budget, 67.9 / 19.0, "Tomorrow redistributes from fresh remaining")
+        // New billing cycle resets the baseline even on the same calendar day.
+        let newCycle = Quota(id: "C", name: "Cursor", used: 1, reset: budgetReset.addingTimeInterval(30 * 86400), updated: afternoon)
+        let cycleAnchor = DailyPacing.nextAnchor(for: newCycle, now: afternoon, existing: sameDay, calendar: calendar)
+        check(cycleAnchor.startUsed == 1 && cycleAnchor.startRemaining == 99, "New cycle starts fresh")
+        check(newCycle.dailyInfo(at: afternoon, anchor: cycleAnchor, calendar: calendar).usedToday == 0, "New cycle spend starts at zero")
+        // Downward server corrections never show negative spend.
+        let dipQuota = Quota(id: "C", name: "Cursor", used: 29, reset: budgetReset, updated: afternoon)
+        let dipAnchor = DailyPacing.nextAnchor(for: dipQuota, now: afternoon, existing: sameDay, calendar: calendar)
+        check(dipQuota.dailyInfo(at: afternoon, anchor: dipAnchor, calendar: calendar).usedToday == 0, "Intraday correction clamps to zero")
+        let gapAnchor = DailyAnchor(day: "2026-09-17", startUsed: 30, startRemaining: 70, reset: budgetReset, lastUsed: 40, lastDay: "2026-09-17")
+        let gapQuota = Quota(id: "C", name: "Cursor", used: 35, reset: budgetReset, updated: nextMorning)
+        let gapNext = DailyPacing.nextAnchor(for: gapQuota, now: nextMorning, existing: gapAnchor, calendar: calendar)
+        check(gapQuota.dailyInfo(at: nextMorning, anchor: gapNext, calendar: calendar).usedToday == 0, "New-day correction clamps to zero")
+        // No weekdays left has no budget (not an invented allowance).
+        check(weekend.dailyInfo(at: saturday, anchor: DailyPacing.nextAnchor(for: weekend, now: saturday, existing: nil, calendar: calendar), workdaysOnly: true, calendar: calendar).budget == nil, "Weekend budget is unavailable")
+        // Zero-balance edge: empty budget with spend is over; without spend is idle.
+        let emptyInfo = DailyBudgetInfo(budget: 0, usedToday: 0)
+        check(emptyInfo.fraction == 0 && !emptyInfo.isOver && !emptyInfo.isWarning, "Empty budget without spend is idle")
+        let emptyOver = DailyBudgetInfo(budget: 0, usedToday: 1)
+        check(emptyOver.isOver && emptyOver.fraction == 1, "Any spend against an empty budget is over")
+        // Missing anchor falls back to a live estimate with zero spend today.
+        let fallback = morningQuota.dailyInfo(at: morning, anchor: nil, calendar: calendar)
+        close(fallback.budget, morningQuota.safePerDay(at: morning, calendar: calendar) ?? -1, "Missing anchor falls back to live pacing")
+        check(fallback.usedToday == 0, "Missing anchor shows no spend yet")
+        // Anchors survive a UserDefaults round-trip (restart persistence).
+        let encoded = try JSONEncoder().encode(nextAnchor)
+        let decoded = try JSONDecoder().decode(DailyAnchor.self, from: encoded)
+        check(decoded == nextAnchor, "Daily anchor is Codable for persistence")
+
         try checkSQLiteFixture()
         print("Passed \(assertions) parser and pacing checks.")
         if CommandLine.arguments.contains("--live") {

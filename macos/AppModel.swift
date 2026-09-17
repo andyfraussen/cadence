@@ -26,6 +26,9 @@ final class AppModel: ObservableObject {
         }
     }
     @Published var workdaysOnly: Bool { didSet { defaults.set(workdaysOnly, forKey: "workdaysOnly") } }
+    /// Morning baselines per quota id (`C`, `O`, `G`). Persisted so the daily
+    /// budget survives restarts and stays fixed until the next morning.
+    @Published var dailyAnchors: [String: DailyAnchor] = [:]
     var onDisplayChange: (() -> Void)?
     private let defaults: UserDefaults
     private var generation = 0
@@ -56,12 +59,59 @@ final class AppModel: ObservableObject {
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "both") ?? .both
         showGrok = defaults.object(forKey: "showGrok") as? Bool ?? true
         workdaysOnly = defaults.bool(forKey: "workdaysOnly")
+        dailyAnchors = Self.loadDailyAnchors(from: defaults)
         if demo {
             let now = Date()
             monthly = [Quota(id: "C", name: "Cursor Models", used: 12.3, reset: now.addingTimeInterval(25 * 86400), updated: now),
-                       Quota(id: "O", name: "Other Models", used: 14, reset: now.addingTimeInterval(25 * 86400), updated: now)]
+                        Quota(id: "O", name: "Other Models", used: 14, reset: now.addingTimeInterval(25 * 86400), updated: now)]
             grok = Quota(id: "G", name: "Grok Bot", used: 2.3, reset: now.addingTimeInterval(7 * 86400), updated: now)
+            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []), at: now)
         }
+    }
+
+    // MARK: - Daily budget (fixed morning allowance)
+
+    private static func dailyKey(for id: String) -> String { "dailyAnchor.\(id)" }
+
+    private static func loadDailyAnchors(from defaults: UserDefaults) -> [String: DailyAnchor] {
+        var result: [String: DailyAnchor] = [:]
+        for id in ["C", "O", "G"] {
+            guard let data = defaults.data(forKey: dailyKey(for: id)) else { continue }
+            guard let anchor = try? JSONDecoder().decode(DailyAnchor.self, from: data) else { continue }
+            guard anchor.startUsed.isFinite, anchor.startRemaining.isFinite, anchor.lastUsed.isFinite else { continue }
+            result[id] = anchor
+        }
+        return result
+    }
+
+    private func saveDailyAnchor(_ anchor: DailyAnchor, for id: String) {
+        dailyAnchors[id] = anchor
+        if let data = try? JSONEncoder().encode(anchor) {
+            defaults.set(data, forKey: Self.dailyKey(for: id))
+        }
+    }
+
+    /// Freeze this morning's baseline on first sight each day; keep it steady
+    /// afterwards. Called after every successful fetch so overnight spend is
+    /// carried into today's baseline and savings/overspend redistribute
+    /// tomorrow via the fresh `remaining`.
+    func recordDailySnapshots(for quotas: [Quota], at now: Date = Date(), calendar: Calendar = .current) {
+        for quota in quotas {
+            let next = DailyPacing.nextAnchor(for: quota, now: now, existing: dailyAnchors[quota.id], calendar: calendar)
+            // Skip redundant writes so `@Published` doesn't churn the popover.
+            if dailyAnchors[quota.id] != next {
+                saveDailyAnchor(next, for: quota.id)
+            }
+        }
+    }
+
+    /// Today's spend vs. this morning's fixed budget. Percentages are shares
+    /// of the total provider quota. Falls back to a live `remaining/days`
+    /// estimate before the first snapshot so the card never shows `—`
+    /// unnecessarily.
+    func dailyInfo(for quota: Quota, at now: Date = Date(), workdaysOnly: Bool? = nil, calendar: Calendar = .current) -> DailyBudgetInfo {
+        quota.dailyInfo(at: now, anchor: dailyAnchors[quota.id],
+                        workdaysOnly: workdaysOnly ?? self.workdaysOnly, calendar: calendar)
     }
 
     func authenticationChanged() {
@@ -88,7 +138,11 @@ final class AppModel: ObservableObject {
 
     /// Manual refresh. Always runs; used by popover open, Retry, and auth changes.
     func refresh() {
-        guard !demo else { onDisplayChange?(); return }
+        guard !demo else {
+            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []))
+            onDisplayChange?()
+            return
+        }
         // Debounce concurrent token loads; fetch tasks debounce individually below.
         guard tokenTask == nil else { onDisplayChange?(); return }
         tokenLoading = true
@@ -145,7 +199,9 @@ final class AppModel: ObservableObject {
                 let result = await fetchMonthly(token)
                 guard generation == current else { return }
                 switch result {
-                case .success(let quotas): monthly = quotas; monthlyError = nil
+                case .success(let quotas):
+                    monthly = quotas; monthlyError = nil
+                    recordDailySnapshots(for: quotas)
                 case .failure(let error): monthlyError = error.localizedDescription
                 }
                 monthlyRefreshing = false; monthlyTask = nil
@@ -160,7 +216,9 @@ final class AppModel: ObservableObject {
                 let result = await fetchGrok(token)
                 guard generation == current, grokGeneration == request else { return }
                 switch result {
-                case .success(let quota): grok = quota; grokError = nil
+                case .success(let quota):
+                    grok = quota; grokError = nil
+                    recordDailySnapshots(for: [quota])
                 case .failure(let error): grokError = error.localizedDescription
                 }
                 grokRefreshing = false; grokTask = nil

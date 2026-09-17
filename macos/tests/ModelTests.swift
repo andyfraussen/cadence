@@ -142,6 +142,35 @@ struct ModelTests {
         let demo = AppModel(demo: true, defaults: defaults, tokenLoader: { preconditionFailure("Demo must not authenticate") })
         demo.refresh()
         precondition(demo.syncStatus() == .demo, "Demo status does not claim a live connection")
+        // Fixed morning budget persists across restarts and holds steady intraday.
+        let dailySuite = "dev.fraussen.cadence.daily.\(UUID().uuidString)"
+        let dailyDefaults = UserDefaults(suiteName: dailySuite)!
+        defer { dailyDefaults.removePersistentDomain(forName: dailySuite) }
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(secondsFromGMT: 0)!
+        let dayModel = AppModel(defaults: dailyDefaults, tokenLoader: { "x" })
+        let dayStart = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 8))!
+        let dayAfternoon = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 18))!
+        let dayNext = calendar.date(from: DateComponents(year: 2026, month: 9, day: 18, hour: 8))!
+        let dayReset = calendar.startOfDay(for: dayStart).addingTimeInterval(20 * 86400)
+        let dayMorningQuota = Quota(id: "C", name: "Cursor", used: 30, reset: dayReset, updated: dayStart)
+        dayModel.recordDailySnapshots(for: [dayMorningQuota], at: dayStart, calendar: calendar)
+        let morningBudget = dayModel.dailyInfo(for: dayMorningQuota, at: dayStart, calendar: calendar).budget
+        precondition(morningBudget != nil && abs(morningBudget! - 3.5) < 0.000001, "Morning budget persists")
+        let dayAfternoonQuota = Quota(id: "C", name: "Cursor", used: 32.1, reset: dayReset, updated: dayAfternoon)
+        dayModel.recordDailySnapshots(for: [dayAfternoonQuota], at: dayAfternoon, calendar: calendar)
+        let afternoonInfo = dayModel.dailyInfo(for: dayAfternoonQuota, at: dayAfternoon, calendar: calendar)
+        precondition(abs((afternoonInfo.budget ?? -1) - 3.5) < 0.000001, "Intraday budget holds steady")
+        precondition(abs(afternoonInfo.usedToday - 2.1) < 0.000001 && abs((afternoonInfo.available ?? -1) - 1.4) < 0.000001, "Intraday spend tracks morning baseline")
+        // Reload survives restarts via UserDefaults.
+        let reloaded = AppModel(defaults: dailyDefaults, tokenLoader: { "x" })
+        let reloadedInfo = reloaded.dailyInfo(for: dayAfternoonQuota, at: dayAfternoon, calendar: calendar)
+        precondition(abs((reloadedInfo.budget ?? -1) - 3.5) < 0.000001, "Budget survives restart")
+        // Next morning redistributes from fresh remaining.
+        let nextQuota = Quota(id: "C", name: "Cursor", used: 33.0, reset: dayReset, updated: dayNext)
+        reloaded.recordDailySnapshots(for: [nextQuota], at: dayNext, calendar: calendar)
+        let redistributed = reloaded.dailyInfo(for: nextQuota, at: dayNext, calendar: calendar)
+        precondition(abs((redistributed.budget ?? -1) - 67.9 / 19.0) < 0.000001, "Savings and overspend redistribute tomorrow")
         print("Passed model regression checks.")
     }
 

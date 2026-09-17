@@ -60,19 +60,19 @@ struct DashboardView: View {
                  if model.monthly.isEmpty { unavailable("Cursor & Other Models", model.monthlyError) }
                  else {
                      ForEach(model.monthly) { quota in
-                         QuotaCard(quota: quota, failure: model.monthlyError, workdaysOnly: model.workdaysOnly)
+                         QuotaCard(quota: quota, failure: model.monthlyError, workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[quota.id])
                      }
                  }
                  if model.showGrok {
-                     if let grok = model.grok { QuotaCard(quota: grok, failure: model.grokError, workdaysOnly: model.workdaysOnly) }
+                     if let grok = model.grok { QuotaCard(quota: grok, failure: model.grokError, workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[grok.id]) }
                      else { unavailable("Grok Bot · weekly", model.grokError) }
                  }
              }
              DisclosureGroup {
-                 Text("Your remaining quota divided across the \(model.workdaysOnly ? "weekdays" : "days") until reset. It’s an average you can still use per day, measured as a percentage of the full quota—not a separate daily limit or a record of today’s spending.")
+                 Text("Each morning your remaining quota is divided across the \(model.workdaysOnly ? "weekdays" : "days") until reset to set today’s fixed budget. Today’s usage is measured against that budget—both as shares of your total quota. The budget stays steady all day; savings or overspend redistribute into tomorrow’s budget. It’s a visual pacing guide, not a block.")
                      .font(.system(size: 12)).foregroundStyle(.secondary).fixedSize(horizontal: false, vertical: true)
              } label: {
-                 Label("What does “safe per day” mean?", systemImage: "info.circle")
+                 Label("What does “today’s budget” mean?", systemImage: "info.circle")
                      .font(.system(size: 12)).fontWeight(.medium)
              }
               }.padding(.trailing, 4)
@@ -124,6 +124,9 @@ struct QuotaCard: View {
     let quota: Quota
     let failure: String?
     let workdaysOnly: Bool
+    /// Morning baseline for the fixed daily budget. Nil before the first
+    /// snapshot (falls back to a live estimate with zero spend today).
+    let anchor: DailyAnchor?
     private func isStale(now: Date) -> Bool { failure != nil || quota.isStale(at: now) }
     /// Cursor-monochrome severity: healthy pools render in primary black/white,
     /// warnings stay orange/red so color always means something is wrong.
@@ -131,14 +134,24 @@ struct QuotaCard: View {
         if isStale(now: now) { return .orange }
         return quota.remaining < 10 ? .red : .primary
     }
+    /// Daily pacing severity: steady black while on pace, amber near the
+    /// budget (≥80%), red once over. Only the daily bar uses this so color
+    /// always signals today's pace.
+    private func dailyColor(_ daily: DailyBudgetInfo?) -> Color {
+        guard let daily, daily.budget != nil else { return .primary }
+        if daily.isOver { return .red }
+        if daily.isWarning { return .orange }
+        return .primary
+    }
 
     var body: some View {
-        // Single timestamp per render so stale/safe/days-left cannot disagree
+        // Single timestamp per render so stale/budget/days-left cannot disagree
         // when a render straddles midnight or the 180s stale boundary.
         let now = Date()
         let stale = isStale(now: now)
         let accent = accent(now: now)
-        let safe = stale ? nil : quota.safePerDay(at: now, workdaysOnly: workdaysOnly)
+        let daily: DailyBudgetInfo? = stale ? nil : quota.dailyInfo(at: now, anchor: anchor, workdaysOnly: workdaysOnly)
+        let dailyAccent = dailyColor(daily)
         let remaining = quota.resetRemainingText(at: now, workdaysOnly: workdaysOnly)
         VStack(alignment: .leading, spacing: 10) {
             HStack(spacing: 7) {
@@ -161,15 +174,34 @@ struct QuotaCard: View {
             }
             MeterBar(fraction: quota.remaining / 100, solid: accent,
                      label: "\(quota.name) remaining", value: String(format: "%.1f percent", quota.remaining))
-            HStack {
-                Text(workdaysOnly ? "Safe per weekday" : "Safe per day")
-                    .font(.system(size: 12, weight: .medium))
-                Spacer()
-                if let safe {
-                    Text(String(format: "%.2f%% of quota", safe))
-                        .font(.system(size: 13, weight: .semibold)).monospacedDigit()
-                        .foregroundStyle(accent)
-                } else { Text("—").font(.system(size: 12)).foregroundStyle(.secondary) }
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Text("Today")
+                        .font(.system(size: 12, weight: .medium))
+                    Spacer()
+                    if let daily, let budget = daily.budget {
+                        Text(String(format: "%.1f%% used / %.1f%% budget", daily.usedToday, budget))
+                            .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(dailyAccent == .primary ? .primary : dailyAccent)
+                    } else { Text("—").font(.system(size: 12)).foregroundStyle(.secondary) }
+                }
+                if let daily, let budget = daily.budget {
+                    MeterBar(fraction: min(1, max(0, daily.fraction ?? 0)), solid: dailyAccent,
+                             label: "\(quota.name) today versus budget",
+                             value: String(format: "%.1f of %.1f percent", daily.usedToday, budget))
+                    if let over = daily.overBy {
+                        Text(String(format: "%.1f%% over today’s budget", over))
+                            .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(.red)
+                    } else if let available = daily.available {
+                        Text(String(format: "%.1f%% available today", available))
+                            .font(.system(size: 12)).monospacedDigit()
+                            .foregroundStyle(daily.isWarning ? .orange : .secondary)
+                    }
+                } else if !stale && workdaysOnly {
+                    Text("No weekdays remain before reset.")
+                        .font(.system(size: 12)).foregroundStyle(.secondary)
+                }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
             .background(Color.primary.opacity(0.06), in: RoundedRectangle(cornerRadius: 10))
@@ -182,7 +214,7 @@ struct QuotaCard: View {
                     .font(.system(size: 11)).foregroundStyle(.secondary)
             } else if quota.reset <= now {
                 Text("Cycle ended. Waiting for a fresh balance.").font(.system(size: 12)).foregroundStyle(.orange)
-            } else if workdaysOnly && safe == nil {
+            } else if workdaysOnly && daily?.budget == nil {
                 Text("No weekdays remain before reset.").font(.system(size: 12)).foregroundStyle(.secondary)
             }
         }

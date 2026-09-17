@@ -57,6 +57,35 @@ struct Quota: Identifiable {
         return days > 0 ? remaining / Double(days) : nil
     }
 
+    /// Today's spend as a share of the *total* provider quota.
+    /// `anchor` holds this morning's baseline (see `DailyPacing`). Clamped at
+    /// zero so server corrections never show negative spend.
+    func usedToday(at now: Date = Date(), anchor: DailyAnchor?, calendar: Calendar = .current) -> Double {
+        _ = now; _ = calendar
+        guard let anchor else { return 0 }
+        return max(0, used - anchor.startUsed)
+    }
+
+    /// Fixed morning budget as a share of the *total* provider quota.
+    /// `anchor.startRemaining` is the morning balance; the divisor is the
+    /// number of days/weekdays remaining *that morning*, so the result stays
+    /// steady across refreshes while today's spend grows. Returns nil when no
+    /// days remain (e.g. weekend-only pacing with no weekdays left).
+    func dailyBudget(at now: Date = Date(), anchor: DailyAnchor?, workdaysOnly: Bool = false, calendar: Calendar = .current) -> Double? {
+        guard let anchor else { return safePerDay(at: now, workdaysOnly: workdaysOnly, calendar: calendar) }
+        let morning = calendar.startOfDay(for: now)
+        let probe = Quota(id: id, name: name, used: 100 - anchor.startRemaining, reset: reset, updated: morning)
+        let days = probe.daysLeft(at: morning, workdaysOnly: workdaysOnly, calendar: calendar)
+        guard days > 0 else { return nil }
+        return anchor.startRemaining / Double(days)
+    }
+
+    func dailyInfo(at now: Date = Date(), anchor: DailyAnchor?, workdaysOnly: Bool = false, calendar: Calendar = .current) -> DailyBudgetInfo {
+        let budget = dailyBudget(at: now, anchor: anchor, workdaysOnly: workdaysOnly, calendar: calendar)
+        let used = usedToday(at: now, anchor: anchor, calendar: calendar)
+        return DailyBudgetInfo(budget: budget, usedToday: used)
+    }
+
     func resetRemainingText(at now: Date = Date(), workdaysOnly: Bool = false, calendar: Calendar = .current) -> String {
         guard reset > now else {
             let unit = workdaysOnly ? "weekdays left" : "days left"
@@ -87,6 +116,98 @@ struct Quota: Identifiable {
             ? (days == 1 ? "weekday left" : "weekdays left")
             : (days == 1 ? "day left" : "days left")
         return "\(days) \(unit)"
+    }
+}
+
+/// Morning baseline for one quota pool. `day`/`lastDay` are local
+/// `yyyy-MM-dd` strings. `startUsed`/`startRemaining` are frozen at the first
+/// observation each morning so the daily budget stays steady all day;
+/// `lastUsed`/`lastDay` track the most recent observation to carry overnight
+/// spend into the next morning's baseline. `reset` detects a new billing
+/// cycle so a fresh balance never inherits yesterday's baseline.
+struct DailyAnchor: Codable, Equatable {
+    var day: String
+    var startUsed: Double
+    var startRemaining: Double
+    var reset: Date
+    var lastUsed: Double
+    var lastDay: String
+}
+
+/// Today's spend vs. this morning's fixed budget. All percentages are shares
+/// of the *total* provider quota (not of the budget), so `budget`,
+/// `usedToday`, `available`, and `overBy` are directly comparable.
+struct DailyBudgetInfo: Equatable {
+    /// Fixed allowance for today (`nil` when no days/weekdays remain).
+    let budget: Double?
+    /// Amount of the total quota consumed since this morning.
+    let usedToday: Double
+    /// Near-budget threshold: amber at 80% of the daily allowance.
+    static let warningThreshold = 0.8
+
+    var available: Double? { budget.map { $0 - usedToday } }
+    var overBy: Double? {
+        guard let budget else { return nil }
+        return usedToday > budget ? usedToday - budget : nil
+    }
+    /// 0…1+ progress of today's spend against the budget. Capped by callers
+    /// for bar width; values > 1 mean over budget.
+    var fraction: Double? {
+        guard let budget else { return nil }
+        guard budget > 0 else { return usedToday > 0 ? 1 : 0 }
+        return usedToday / budget
+    }
+    var isOver: Bool { overBy != nil }
+    var isWarning: Bool {
+        guard let fraction, !isOver else { return false }
+        // Epsilon so binary floating-point (e.g. 2.8/3.5) doesn't flicker
+        // just below the threshold.
+        return fraction + 1e-9 >= Self.warningThreshold
+    }
+}
+
+enum DailyPacing {
+    /// Local calendar day key, e.g. `2026-09-17`. Built from components so it
+    /// respects the caller's calendar/timezone (important for tests).
+    static func dayKey(for date: Date, calendar: Calendar = .current) -> String {
+        let comps = calendar.dateComponents([.year, .month, .day], from: date)
+        return String(format: "%04d-%02d-%02d", comps.year ?? 0, comps.month ?? 0, comps.day ?? 0)
+    }
+
+    /// Resolve the anchor to persist after observing `quota` at `now`.
+    /// - Same day: keep the morning baseline, refresh `lastUsed`.
+    /// - New day: baseline is the last observed usage so overnight spend
+    ///   counts toward today; the morning balance is `100 - baseline` so the
+    ///   new budget reflects pre-spend quota. Savings/overspend therefore
+    ///   redistribute tomorrow via the fresh `remaining`.
+    /// - New cycle (reset changed) or first run: start fresh with zero spend.
+    /// - Downward server corrections (used < baseline) clamp to zero spend
+    ///   rather than showing negative usage.
+    static func nextAnchor(for quota: Quota, now: Date = Date(), existing: DailyAnchor?, calendar: Calendar = .current) -> DailyAnchor {
+        let today = dayKey(for: now, calendar: calendar)
+        guard let existing else {
+            return DailyAnchor(day: today, startUsed: quota.used, startRemaining: quota.remaining,
+                               reset: quota.reset, lastUsed: quota.used, lastDay: today)
+        }
+        let sameCycle = abs(existing.reset.timeIntervalSince(quota.reset)) < 1
+        guard sameCycle else {
+            return DailyAnchor(day: today, startUsed: quota.used, startRemaining: quota.remaining,
+                               reset: quota.reset, lastUsed: quota.used, lastDay: today)
+        }
+        if existing.day == today {
+            var updated = existing
+            if quota.used < existing.startUsed {
+                updated.startUsed = quota.used
+            }
+            updated.lastUsed = quota.used
+            updated.lastDay = today
+            return updated
+        }
+        // New day in the same cycle.
+        let baseline = existing.lastDay.isEmpty ? quota.used : min(existing.lastUsed, quota.used)
+        let morningRemaining = max(0, 100 - baseline)
+        return DailyAnchor(day: today, startUsed: baseline, startRemaining: morningRemaining,
+                           reset: quota.reset, lastUsed: quota.used, lastDay: today)
     }
 }
 
