@@ -19,7 +19,7 @@
 
 If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a month. Coding intensely during the first two weeks can leave you stranded on throttled speeds for the rest of your cycle.
 
-**Cadence** lives quietly in your macOS menu bar. It checks your remaining allowance every minute and computes your **Safe Daily Allowance** (and optional **Weekday-Only Allowance**).
+**Cadence** lives quietly in your macOS menu bar. It checks your remaining allowance every minute and tracks today’s spending against a **fixed daily budget**, with optional **weekday-only pacing**.
 
 <img src="docs/dashboard.png" width="390" alt="Cadence dashboard showing quota pools with safe daily budgets">
 
@@ -30,7 +30,9 @@ If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a mon
 - **Zero Manual Setup (Auto-Sync)**: Reads your active Cursor desktop session directly from local SQLite storage. No copying tokens or pasting API keys required.
 - **Independent Quota Pools**: Tracks **Cursor Models** (Agent, auto), **Other Models** (Claude, GPT), and **Grok Bot** (weekly pool) with separate countdowns.
 - **Smart Pacing Math**:
-  - **Safe Daily Budget**: Divides unused quota across local calendar dates before reset; each partial date counts once, and a reset exactly at midnight excludes that date.
+  - **Fixed Daily Budget**: Sets an allowance on the first successful refresh each local day and keeps it steady as you spend. Savings and overspending feed into the next day’s allowance.
+  - **Today’s Progress**: Shows quota used versus today’s budget and how much is still available. The bar turns amber at 80% and red when over budget, with explicit over-budget text.
+  - **Reset Countdown**: Shows days remaining, or hours and minutes when the reset is today.
   - **Workday Pacing**: Excludes weekends so you can budget for Monday–Friday workflows.
 - **Native Menu Bar Presence**:
   - Monochrome Cadence C icon and/or live remaining percentages directly in your menu bar.
@@ -92,27 +94,30 @@ Downloaded ad-hoc builds may be blocked by Gatekeeper. Verify the source and rel
 
 ## How the Pacing Math Works
 
-The app does not impose arbitrary daily limits; instead, it answers: **"At what average rate can I code today without running dry before the reset?"**
+The daily budget is a visual pacing guide; it does not block usage. All displayed spending percentages are shares of your **total provider quota**, not percentages of the daily budget.
 
-Both modes count local calendar dates overlapping the interval from now up to, but not including, reset. Partial dates count as one; daylight-saving days are still one date. Weekday mode excludes weekends, not holidays. For example, Sunday noon to Monday noon contains two calendar dates but one weekday.
+On the first successful refresh each local day, Cadence sets a budget from the starting balance divided by the days remaining until reset. That allowance stays steady for the day under the same pacing setting. Savings or overspending affect the next day’s budget.
 
-1. **Daily Safe Allowance (All Days)**:
-   $$\text{Daily Budget} = \frac{\text{Remaining } \%}{\text{Days Left}}$$
+- **All days**: Starting remaining quota ÷ calendar dates remaining.
+- **Weekday mode**: Starting remaining quota ÷ weekdays remaining. Weekends are excluded from the divisor, but holidays are not.
 
-2. **Workday Safe Allowance (Mon–Fri Only)**:
-   $$\text{Workday Budget} = \frac{\text{Remaining } \%}{\text{Weekdays Remaining}}$$
+Both modes count local calendar dates overlapping the interval up to, but not including, reset. Partial dates count as one; daylight-saving days are still one date. A reset exactly at midnight excludes that date.
 
-3. **Status Warnings**:
-   - ⚪ **On pace**: Safe pace with steady reserves.
-   - 🔴 **Low (< 10% remaining)**: Critical quota warning.
-   - 🟠 **Stale**: Network offline, refresh failed, or server reset passed; pacing paused to prevent misleading metrics.
+For example, **2.1% used / 3.5% budget** means **1.4% available today**. Spending 4.2% against that budget shows **0.7% over today’s budget**.
+
+- **Below 80% of the daily budget**: Neutral progress bar.
+- **At least 80%, but not over budget**: Amber progress bar.
+- **Over budget**: Red progress bar and explicit over-budget text.
+- **Stale data**: Daily pacing is hidden until fresh usage is available. An overall balance below 10% also has a separate red warning.
+
+Daily baselines survive app restarts. On first use or a new quota cycle, tracking starts from the first observed balance; earlier spending is not reconstructed. On subsequent days, usage since the previous observation is attributed to today, so spending while the app was closed can include earlier days. The budget is established when fresh data arrives, not by a guaranteed midnight reading.
 
 ---
 
 ## Security & Privacy
 
 1. **Authentication**: Cursor stores your session token locally in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. The app opens this database with `SQLITE_OPEN_READONLY` and never writes to it.
-2. **Network**: Ephemeral `URLSession` requests target `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` and `GetSandUsageStatus`. Usage is held in memory only. Hidden Grok does not refresh; visible pools publish independently.
+2. **Network**: Ephemeral `URLSession` requests target `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` and `GetSandUsageStatus`. Daily pacing baselines and last observed usage are saved locally in UserDefaults so budgets survive restarts. Hidden Grok does not refresh; visible pools publish independently.
 3. **Legacy tokens**: Manual-token authentication is no longer supported. Old Cadence Keychain entries are neither read nor deleted; you may remove the `dev.fraussen.cadence` / `cursor-session` entry yourself in Keychain Access.
 
 ---
