@@ -296,7 +296,7 @@ struct SettingsView: View {
                 }
 
                 Section {
-                    Toggle("Launch at Login", isOn: Binding(get: { loginEnabled }, set: setLogin))
+                    Toggle("Launch at Login", isOn: Binding(get: { loginEnabled }, set: { setLogin($0) }))
                     if loginApproval {
                         Button("Approve in System Settings…") {
                             SMAppService.openSystemSettingsLoginItems()
