@@ -2,6 +2,13 @@ import Foundation
 import SQLite3
 
 enum Authentication {
+    static func isCursorInstalled() -> Bool {
+        let home = FileManager.default.homeDirectoryForCurrentUser.path
+        let appPaths = ["/Applications/Cursor.app", home + "/Applications/Cursor.app",
+                        "/Applications/Cursor Nightly.app", home + "/Applications/Cursor Nightly.app"]
+        return (candidatePaths() + appPaths).contains { FileManager.default.fileExists(atPath: $0) }
+    }
+
     /// Ordered install locations to probe. `CURSOR_STATE_VSCDB_PATH` overrides
     /// for tests and custom installs when set to a non-empty value.
     static func candidatePaths() -> [String] {

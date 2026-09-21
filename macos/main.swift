@@ -64,7 +64,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
     private var dashboardHeight: CGFloat {
         let screen = item.button?.window?.screen ?? NSScreen.main
         // Leave room for the popover arrow and screen edges. Content scrolls within this bound.
-        return min(model.showGrok ? 730 : 570, max(220, (screen?.visibleFrame.height ?? 700) - 40))
+        let cursorHeight: CGFloat = model.showCursor ? 430 + (model.showGrok ? 160 : 0) : 0
+        let codexHeight: CGFloat = model.showCodex ? 300 + 180 * CGFloat(max(0, model.codex.count - 1)) : 0
+        let preferred: CGFloat = max(300, 140 + cursorHeight + codexHeight)
+        return min(preferred, max(220, (screen?.visibleFrame.height ?? 700) - 40))
     }
 
     private func configurePopover() {
@@ -80,7 +83,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         button.image = model.displayMode == .limits ? nil : CadenceBrand.menuBarIcon
         button.imagePosition = .imageLeading
         let status = model.hasProblem ? " — attention: click for details." : ". Click to open Cadence."
-        button.toolTip = "\(model.toolbarTitle) remaining. C: Cursor Models, O: Other Models, G: Grok Bot\(status)"
+        button.toolTip = "\(model.toolbarTitle) remaining. C: Cursor Models, O: Other Models, G: Grok Bot, Cx: Codex\(status)"
         button.setAccessibilityLabel("Cadence")
         button.setAccessibilityValue(model.toolbarTitle + " remaining")
         configurePopover()

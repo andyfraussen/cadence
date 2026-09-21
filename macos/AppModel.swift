@@ -8,25 +8,48 @@ final class AppModel: ObservableObject {
     }
     @Published var monthly: [Quota] = []
     @Published var grok: Quota?
+    @Published var codex: [Quota] = []
     @Published var monthlyError: String?
     @Published var grokError: String?
+    @Published var codexError: String?
     @Published private(set) var monthlyRefreshing = false
     @Published private(set) var grokRefreshing = false
+    @Published private(set) var codexRefreshing = false
     @Published private(set) var tokenLoading = false
-    var refreshing: Bool { monthlyRefreshing || grokRefreshing || tokenLoading }
+    var refreshing: Bool { monthlyRefreshing || grokRefreshing || codexRefreshing || tokenLoading }
     @Published var displayMode: DisplayMode { didSet { defaults.set(displayMode.rawValue, forKey: "displayMode"); onDisplayChange?() } }
+    @Published var showCursor: Bool {
+        didSet {
+            defaults.set(showCursor, forKey: "showCursor")
+            if showCursor { refresh() }
+            else { invalidate() }
+            onDisplayChange?()
+        }
+    }
     @Published var showGrok: Bool {
         didSet {
             defaults.set(showGrok, forKey: "showGrok")
             if oldValue != showGrok {
-                if showGrok { refresh() }
+                if showGrok && showCursor { refresh() }
                 else { cancelGrok(); grok = nil; grokError = nil }
             }
             onDisplayChange?()
         }
     }
     @Published var workdaysOnly: Bool { didSet { defaults.set(workdaysOnly, forKey: "workdaysOnly") } }
-    /// Morning baselines per quota id (`C`, `O`, `G`). Persisted so the daily
+    @Published var showCodex: Bool {
+        didSet {
+            defaults.set(showCodex, forKey: "showCodex")
+            if showCodex { refreshCodex() }
+            else {
+                codexGeneration += 1
+                codexTask?.cancel(); codexTask = nil
+                codexRefreshing = false; codex = []; codexError = nil
+            }
+            onDisplayChange?()
+        }
+    }
+    /// Morning baselines per quota id (`C`, `O`, `G`, Codex windows). Persisted so the daily
     /// budget survives restarts and stays fixed until the next morning.
     @Published var dailyAnchors: [String: DailyAnchor] = [:]
     var onDisplayChange: (() -> Void)?
@@ -36,6 +59,8 @@ final class AppModel: ObservableObject {
     private var monthlyTask: Task<Void, Never>?
     private var grokTask: Task<Void, Never>?
     private var tokenTask: Task<Void, Never>?
+    private var codexTask: Task<Void, Never>?
+    private var codexGeneration = 0
     private var lastToken: String?
     private var consecutiveFailures = 0
     private var backoffUntil: Date?
@@ -43,29 +68,36 @@ final class AppModel: ObservableObject {
     private let tokenLoader: () async throws -> String
     private let monthlyLoader: (String) async throws -> [Quota]
     private let grokLoader: (String) async throws -> Quota
+    private let codexLoader: () async throws -> [Quota]
 
     init(demo: Bool = false, defaults: UserDefaults? = nil,
          tokenLoader: @escaping () async throws -> String = { try await Authentication.automaticToken() },
          monthlyLoader: @escaping (String) async throws -> [Quota] = { try UsageParser.monthly(await CursorAPI.fetch("GetCurrentPeriodUsage", token: $0)) },
-         grokLoader: @escaping (String) async throws -> Quota = { try UsageParser.grok(await CursorAPI.fetch("GetSandUsageStatus", token: $0)) }) {
+         grokLoader: @escaping (String) async throws -> Quota = { try UsageParser.grok(await CursorAPI.fetch("GetSandUsageStatus", token: $0)) },
+         codexLoader: @escaping () async throws -> [Quota] = { try await CodexUsage.fetch() }) {
         self.demo = demo
         self.defaults = defaults ?? (demo ? UserDefaults(suiteName: "dev.fraussen.cadence.preview")! : .standard)
         self.tokenLoader = tokenLoader
         self.monthlyLoader = monthlyLoader
         self.grokLoader = grokLoader
+        self.codexLoader = codexLoader
         let defaults = self.defaults
         defaults.removeObject(forKey: "authMode")
         defaults.removeObject(forKey: "authSource")
         displayMode = DisplayMode(rawValue: defaults.string(forKey: "displayMode") ?? "both") ?? .both
+        showCursor = defaults.object(forKey: "showCursor") as? Bool ?? (demo || Authentication.isCursorInstalled())
         showGrok = defaults.object(forKey: "showGrok") as? Bool ?? true
         workdaysOnly = defaults.bool(forKey: "workdaysOnly")
+        showCodex = defaults.object(forKey: "showCodex") as? Bool ??
+            (demo || CodexUsage.executable() != nil)
         dailyAnchors = Self.loadDailyAnchors(from: defaults)
         if demo {
             let now = Date()
             monthly = [Quota(id: "C", name: "Cursor Models", used: 12.3, reset: now.addingTimeInterval(25 * 86400), updated: now),
                         Quota(id: "O", name: "Other Models", used: 14, reset: now.addingTimeInterval(25 * 86400), updated: now)]
             grok = Quota(id: "G", name: "Grok Bot", used: 2.3, reset: now.addingTimeInterval(7 * 86400), updated: now)
-            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []), at: now)
+            codex = [Quota(id: "codex-primary", name: "Codex · Weekly", used: 33, reset: now.addingTimeInterval(4 * 86400), updated: now)]
+            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex, at: now)
         }
     }
 
@@ -75,7 +107,7 @@ final class AppModel: ObservableObject {
 
     private static func loadDailyAnchors(from defaults: UserDefaults) -> [String: DailyAnchor] {
         var result: [String: DailyAnchor] = [:]
-        for id in ["C", "O", "G"] {
+        for id in ["C", "O", "G", "codex-primary", "codex-secondary"] {
             guard let data = defaults.data(forKey: dailyKey(for: id)) else { continue }
             guard let anchor = try? JSONDecoder().decode(DailyAnchor.self, from: data) else { continue }
             guard anchor.startUsed.isFinite, anchor.startRemaining.isFinite, anchor.lastUsed.isFinite else { continue }
@@ -139,10 +171,12 @@ final class AppModel: ObservableObject {
     /// Manual refresh. Always runs; used by popover open, Retry, and auth changes.
     func refresh() {
         guard !demo else {
-            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []))
+            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex)
             onDisplayChange?()
             return
         }
+        refreshCodex()
+        guard showCursor else { onDisplayChange?(); return }
         // Debounce concurrent token loads; fetch tasks debounce individually below.
         guard tokenTask == nil else { onDisplayChange?(); return }
         tokenLoading = true
@@ -170,10 +204,36 @@ final class AppModel: ObservableObject {
         }
     }
 
+    func refreshCodex() {
+        guard showCodex, !demo, codexTask == nil else { return }
+        codexRefreshing = true
+        codexGeneration += 1
+        let request = codexGeneration
+        codexTask = Task {
+            let result: Result<[Quota], Error>
+            do { result = .success(try await codexLoader()) }
+            catch { result = .failure(error) }
+            guard codexGeneration == request, showCodex else { return }
+            switch result {
+            case .success(let quotas):
+                codex = quotas; codexError = nil
+                recordDailySnapshots(for: quotas.filter { $0.name == "Codex · Weekly" })
+            case .failure(let error): codexError = error.localizedDescription
+            }
+            codexRefreshing = false
+            codexTask = nil
+            onDisplayChange?()
+        }
+    }
+
     /// Automatic refresh for the 60s timer. Skips while in exponential backoff
     /// so an offline or failing backend does not hammer the API.
     func refreshIfDue(at now: Date = Date()) {
-        if let until = backoffUntil, now < until { updateMenuBarOnly(); return }
+        if showCursor, let until = backoffUntil, now < until {
+            refreshCodex()
+            updateMenuBarOnly()
+            return
+        }
         refresh()
     }
 
@@ -260,35 +320,40 @@ final class AppModel: ObservableObject {
 
     enum SyncStatus: String {
         case demo = "Demo data — not connected"
-        case fetching = "Refreshing from Cursor…"
-        case unavailable = "Sync unavailable — open Cursor and retry"
+        case fetching = "Refreshing limits…"
+        case unavailable = "Sync unavailable — check provider and retry"
         case stale = "Usage is stale — retry to update"
-        case connected = "Connected to Cursor desktop app"
-        case idle = "Waiting to sync with Cursor"
+        case connected = "Limits up to date"
+        case idle = "Waiting to sync limits"
     }
 
     func syncStatus(at now: Date = Date()) -> SyncStatus {
         if demo { return .demo }
         if refreshing { return .fetching }
-        if monthlyError != nil || (showGrok && grokError != nil) { return .unavailable }
-        if monthly.contains(where: { $0.isStale(at: now) }) || (showGrok && grok?.isStale(at: now) == true) { return .stale }
-        if monthly.isEmpty || (showGrok && grok == nil) { return .idle }
+        if (showCursor && (monthlyError != nil || (showGrok && grokError != nil))) || (showCodex && codexError != nil) { return .unavailable }
+        if (showCursor && (monthly.contains(where: { $0.isStale(at: now) }) || (showGrok && grok?.isStale(at: now) == true))) ||
+            (showCodex && codex.contains(where: { $0.isStale(at: now) })) { return .stale }
+        if (showCursor && (monthly.isEmpty || (showGrok && grok == nil))) || (showCodex && codex.isEmpty) { return .idle }
+        if !showCursor && !showCodex { return .idle }
         return .connected
     }
 
     var lastSuccess: Date? {
-        (monthly.map(\.updated) + (showGrok ? [grok?.updated].compactMap { $0 } : [])).max()
+        ((showCursor ? monthly.map(\.updated) : []) + (showCursor && showGrok ? [grok?.updated].compactMap { $0 } : []) +
+         (showCodex ? codex.map(\.updated) : [])).max()
     }
 
     var toolbarTitle: String {
-        var pieces = ["C", "O"].map { id in
+        var pieces: [String] = showCursor ? ["C", "O"].map { id in
             monthly.first(where: { $0.id == id }).map { String(format: "%@ %.0f%%", id, $0.remaining) } ?? "\(id) —"
-        }
-        if showGrok { pieces.append(grok.map { String(format: "G %.0f%%", $0.remaining) } ?? "G —") }
-        return pieces.joined(separator: " · ") + (hasProblem ? " !" : "")
+        } : []
+        if showCursor && showGrok { pieces.append(grok.map { String(format: "G %.0f%%", $0.remaining) } ?? "G —") }
+        if showCodex { pieces.append(codex.first.map { String(format: "Cx %.0f%%", $0.remaining) } ?? "Cx —") }
+        return (pieces.isEmpty ? "Cadence" : pieces.joined(separator: " · ")) + (hasProblem ? " !" : "")
     }
     var hasProblem: Bool {
-        monthlyError != nil || monthly.contains(where: { $0.isStale() }) ||
-        (showGrok && (grokError != nil || grok?.isStale() == true))
+        (showCursor && (monthlyError != nil || monthly.contains(where: { $0.isStale() }) ||
+                        (showGrok && (grokError != nil || grok?.isStale() == true)))) ||
+        (showCodex && (codexError != nil || codex.contains(where: { $0.isStale() })))
     }
 }

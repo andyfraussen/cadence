@@ -5,18 +5,18 @@ import SQLite3
 struct Tests {
     static func main() async throws {
         var assertions = 0
+        let now = ISO8601DateFormatter().date(from: "2026-09-10T12:00:00Z")!
         func check(_ condition: @autoclosure () -> Bool, _ name: String) {
             precondition(condition(), name)
             assertions += 1
         }
         func rejects(_ json: String, grok: Bool = false) {
             do {
-                if grok { _ = try UsageParser.grok(Data(json.utf8)) }
-                else { _ = try UsageParser.monthly(Data(json.utf8)) }
+                if grok { _ = try UsageParser.grok(Data(json.utf8), now: now) }
+                else { _ = try UsageParser.monthly(Data(json.utf8), now: now) }
                 preconditionFailure("Invalid quota was accepted")
             } catch { assertions += 1 }
         }
-        let now = ISO8601DateFormatter().date(from: "2026-09-10T12:00:00Z")!
         let iso = ISO8601DateFormatter()
         for (start, end, zone, weekdays, days) in [
             ("2026-09-13T12:00:00Z", "2026-09-14T12:00:00Z", "UTC", 1, 2),
@@ -44,6 +44,19 @@ struct Tests {
         check(monthly[0].reset.timeIntervalSince1970 == 1791114713, "Milliseconds decoded")
         check(!monthly[0].isStale(at: now), "Fresh response")
         check(monthly[0].isStale(at: now.addingTimeInterval(181)), "Old response is stale")
+        let codexJSON = Data("""
+        {"id":2,"result":{"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":33,"windowDurationMins":10080,"resetsAt":1790338564},"secondary":null}}}}
+        """.utf8)
+        let codex = try CodexUsage.parse(codexJSON, at: now)
+        check(codex.count == 1 && codex[0].name == "Codex · Weekly" && codex[0].remaining == 67, "Codex weekly limit parsed")
+        check(codex[0].reset.timeIntervalSince1970 == 1790338564, "Codex reset is seconds")
+        let twoWindows = Data("""
+        {"id":2,"result":{"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":20,"windowDurationMins":300,"resetsAt":1790330000},"secondary":{"usedPercent":40,"windowDurationMins":10080,"resetsAt":1790338564}}}}}
+        """.utf8)
+        let both = try CodexUsage.parse(twoWindows, at: now)
+        check(both.count == 2 && both[0].name == "Codex · 5 hours" && both[1].name == "Codex · Weekly", "Codex shows both returned windows")
+        do { _ = try CodexUsage.parse(Data("{\"id\":2,\"result\":{}}".utf8), at: now); preconditionFailure("Missing Codex limit was accepted") }
+        catch { assertions += 1 }
         let zero = try UsageParser.monthly(Data("""
         {"billingCycleEnd":1791114713000,"planUsage":{"autoPercentUsed":0,"apiPercentUsed":125}}
         """.utf8))
@@ -227,6 +240,13 @@ struct Tests {
                 print(String(format: "%@: %.2f%% left; %.2f%% safe per day", quota.name, quota.remaining, quota.safePerDay() ?? 0))
             }
             print("Live Swift API checks passed. No credentials printed or persisted.")
+        }
+        if CommandLine.arguments.contains("--live-codex") {
+            let limits = try await CodexUsage.fetch()
+            for limit in limits {
+                print(String(format: "%@: %.1f%% left", limit.name, limit.remaining))
+            }
+            print("Live Codex app-server check passed. No credentials printed or persisted.")
         }
     }
 

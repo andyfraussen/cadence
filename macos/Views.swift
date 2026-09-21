@@ -57,15 +57,35 @@ struct DashboardView: View {
             ScrollView(.vertical) {
               VStack(alignment: .leading, spacing: 12) {
                 VStack(spacing: 12) {
-                 if model.monthly.isEmpty { unavailable("Cursor & Other Models", model.monthlyError) }
-                 else {
-                     ForEach(model.monthly) { quota in
-                         QuotaCard(quota: quota, failure: model.monthlyError, workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[quota.id])
+                 if model.showCursor {
+                     if model.monthly.isEmpty { unavailable("Cursor & Other Models", model.monthlyError) }
+                     else {
+                         ForEach(model.monthly) { quota in
+                             QuotaCard(quota: quota, failure: model.monthlyError, workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[quota.id])
+                         }
+                     }
+                     if model.showGrok {
+                         if let grok = model.grok { QuotaCard(quota: grok, failure: model.grokError, workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[grok.id]) }
+                         else { unavailable("Grok Bot · weekly", model.grokError) }
                      }
                  }
-                 if model.showGrok {
-                     if let grok = model.grok { QuotaCard(quota: grok, failure: model.grokError, workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[grok.id]) }
-                     else { unavailable("Grok Bot · weekly", model.grokError) }
+                 if model.showCodex {
+                     Divider().padding(.vertical, 2)
+                     HStack {
+                         Text("CODEX").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(CodexQuotaCard.purple)
+                         Spacer()
+                         if model.codexRefreshing { ProgressView().controlSize(.mini) }
+                     }
+                     if model.codex.isEmpty { unavailable("Codex", model.codexError) }
+                     else {
+                         ForEach(model.codex) { quota in
+                             CodexQuotaCard(quota: quota, failure: model.codexError,
+                                            workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[quota.id])
+                         }
+                     }
+                 }
+                 if !model.showCursor && !model.showCodex {
+                     unavailable("No providers enabled", "Cadence checks for installed apps on launch. Enable Cursor or Codex in Settings to monitor its limits.")
                  }
              }
              DisclosureGroup {
@@ -80,7 +100,9 @@ struct DashboardView: View {
             Divider()
             HStack {
                 Button("Settings…", action: settings)
-                Button("Cursor dashboard") { NSWorkspace.shared.open(URL(string: "https://cursor.com/dashboard")!) }
+                if model.showCursor {
+                    Button("Cursor dashboard") { NSWorkspace.shared.open(URL(string: "https://cursor.com/dashboard")!) }
+                }
                 Spacer()
                 if model.refreshing { ProgressView().controlSize(.small).accessibilityLabel("Refreshing") }
                 Button("Quit", action: quit)
@@ -96,6 +118,82 @@ struct DashboardView: View {
         }.frame(maxWidth: .infinity, alignment: .leading).padding(14)
             .background(Color.primary.opacity(0.05), in: RoundedRectangle(cornerRadius: 14))
             .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Color.primary.opacity(0.07), lineWidth: 1))
+    }
+}
+
+struct CodexQuotaCard: View {
+    static let purple = Color(red: 0.48, green: 0.34, blue: 0.82)
+    let quota: Quota
+    let failure: String?
+    let workdaysOnly: Bool
+    let anchor: DailyAnchor?
+
+    var body: some View {
+        let now = Date()
+        let stale = quota.isStale(at: now) || failure != nil
+        let weekly = quota.name == "Codex · Weekly"
+        let daily: DailyBudgetInfo? = weekly && !stale
+            ? quota.dailyInfo(at: now, anchor: anchor, workdaysOnly: workdaysOnly) : nil
+        let dailyAccent: Color = daily?.isOver == true ? .red : daily?.isWarning == true ? .orange : Self.purple
+        VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Circle().fill(stale ? .orange : Self.purple).frame(width: 7, height: 7)
+                Text(quota.name).font(.system(size: 13, weight: .semibold))
+                Spacer()
+                Text(quota.name.components(separatedBy: " · ").last?.uppercased() ?? "LIMIT")
+                    .font(.system(size: 9.5, weight: .bold)).tracking(0.7)
+                    .padding(.horizontal, 7).padding(.vertical, 3)
+                    .foregroundStyle(Self.purple)
+                    .background(Self.purple.opacity(0.12), in: Capsule())
+            }
+            HStack(alignment: .firstTextBaseline, spacing: 6) {
+                Text(String(format: "%.1f", quota.remaining))
+                    .font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit()
+                    .foregroundStyle(Self.purple)
+                Text("% left").font(.system(size: 13)).foregroundStyle(.secondary)
+                Spacer()
+                if stale { Label("Stale", systemImage: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(.orange) }
+            }
+            MeterBar(fraction: quota.remaining / 100, solid: Self.purple,
+                     label: "\(quota.name) remaining", value: String(format: "%.1f percent", quota.remaining))
+            if weekly {
+                VStack(alignment: .leading, spacing: 7) {
+                    HStack {
+                        Text("Today").font(.system(size: 12, weight: .medium))
+                        Spacer()
+                        if let daily, let budget = daily.budget {
+                            Text(String(format: "%.1f%% used / %.1f%% budget", daily.usedToday, budget))
+                                .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                                .foregroundStyle(dailyAccent)
+                        } else {
+                            Text("—").font(.system(size: 12)).foregroundStyle(.secondary)
+                        }
+                    }
+                    if let daily, let budget = daily.budget {
+                        MeterBar(fraction: min(1, max(0, daily.fraction ?? 0)), solid: dailyAccent,
+                                 label: "\(quota.name) today versus budget",
+                                 value: String(format: "%.1f of %.1f percent", daily.usedToday, budget))
+                        if let over = daily.overBy {
+                            Text(String(format: "%.1f%% over today’s budget", over))
+                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.red)
+                        } else if let available = daily.available {
+                            Text(String(format: "%.1f%% available today", available))
+                                .font(.system(size: 12)).foregroundStyle(daily.isWarning ? .orange : .secondary)
+                        }
+                    } else if !stale && workdaysOnly {
+                        Text("No weekdays remain before reset.").font(.system(size: 12)).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(.horizontal, 10).padding(.vertical, 8)
+                .background(Self.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+            }
+            Text("Resets \(quota.reset.formatted(date: .abbreviated, time: .shortened)) · \(quota.resetRemainingText(at: now))")
+                .font(.system(size: 11)).foregroundStyle(.secondary)
+            if let failure { Text(failure).font(.system(size: 12)).foregroundStyle(.orange) }
+        }
+        .padding(14)
+        .background(Self.purple.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Self.purple.opacity(0.20), lineWidth: 1))
     }
 }
 
@@ -268,6 +366,20 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
 
+                } header: {
+                    Label("Menu Bar", systemImage: "menubar.dock.rectangle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle(isOn: $model.showCursor) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show Cursor limits")
+                            Text("On automatically when installed; turn off to hide Cursor")
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                    }
                     Toggle(isOn: $model.showGrok) {
                         VStack(alignment: .leading, spacing: 2) {
                             Text("Show Grok Bot")
@@ -275,8 +387,9 @@ struct SettingsView: View {
                                 .font(.system(size: 11)).foregroundStyle(.secondary)
                         }
                     }
+                    .disabled(!model.showCursor)
                 } header: {
-                    Label("Menu Bar", systemImage: "menubar.dock.rectangle")
+                    Label("Cursor", systemImage: "cursorarrow")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
                 }
@@ -293,6 +406,20 @@ struct SettingsView: View {
                     Label("Daily Pacing", systemImage: "calendar.badge.clock")
                         .font(.system(size: 11, weight: .semibold))
                         .foregroundStyle(.secondary)
+                }
+
+                Section {
+                    Toggle(isOn: $model.showCodex) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show Codex limits")
+                            Text("Uses ChatGPT’s bundled Codex or an installed Codex CLI")
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Label("Codex", systemImage: "sparkle")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(CodexQuotaCard.purple)
                 }
 
                 Section {
@@ -343,7 +470,7 @@ struct SettingsView: View {
             .padding(.vertical, 12)
             .background(Color.primary.opacity(0.02))
         }
-        .frame(width: 440, height: 460)
+        .frame(width: 440, height: 480)
         .background(Color(nsColor: .windowBackgroundColor))
         .onReceive(NotificationCenter.default.publisher(for: NSApplication.didBecomeActiveNotification)) { _ in
             loginEnabled = SMAppService.mainApp.status == .enabled

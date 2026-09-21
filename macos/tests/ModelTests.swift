@@ -20,6 +20,8 @@ struct ModelTests {
         let defaults = UserDefaults(suiteName: suite)!
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(false, forKey: "showGrok")
+        defaults.set(false, forKey: "showCodex")
+        defaults.set(true, forKey: "showCursor")
         defaults.set("manual", forKey: "authMode")
         defaults.set("manual", forKey: "authSource")
         let monthly = Pending<[Quota]>()
@@ -171,6 +173,38 @@ struct ModelTests {
         reloaded.recordDailySnapshots(for: [nextQuota], at: dayNext, calendar: calendar)
         let redistributed = reloaded.dailyInfo(for: nextQuota, at: dayNext, calendar: calendar)
         precondition(abs((redistributed.budget ?? -1) - 67.9 / 19.0) < 0.000001, "Savings and overspend redistribute tomorrow")
+        let codexSuite = "dev.fraussen.cadence.codex.\(UUID().uuidString)"
+        let codexDefaults = UserDefaults(suiteName: codexSuite)!
+        defer { codexDefaults.removePersistentDomain(forName: codexSuite) }
+        codexDefaults.set(true, forKey: "showCodex")
+        codexDefaults.set(false, forKey: "showCursor")
+        let codexPending = Pending<[Quota]>()
+        let codexModel = AppModel(defaults: codexDefaults, tokenLoader: { preconditionFailure("Disabled Cursor must not authenticate") },
+                                  codexLoader: { try await codexPending.load() })
+        codexModel.refresh()
+        await wait { codexPending.count == 1 }
+        precondition(codexModel.codexRefreshing, "Codex refresh is independent")
+        let codexQuota = Quota(id: "codex-primary", name: "Codex · Weekly", used: 33,
+                               reset: Date().addingTimeInterval(7 * 86400), updated: Date())
+        codexPending.complete(.success([codexQuota]))
+        await wait { !codexModel.codexRefreshing }
+        precondition(codexModel.codex.first?.remaining == 67 && codexModel.toolbarTitle.contains("Cx 67%"), "Codex publishes to menu bar")
+        precondition(codexModel.syncStatus() == .connected && codexModel.dailyAnchors["codex-primary"] != nil,
+                     "Codex-only mode is connected and records a daily baseline")
+        let codexBudget = codexModel.dailyInfo(for: codexQuota).budget
+        precondition(codexBudget != nil && codexModel.dailyInfo(for: codexQuota).usedToday == 0,
+                     "Codex weekly pacing starts with a fixed budget")
+        let codexLater = Quota(id: codexQuota.id, name: codexQuota.name, used: 34,
+                               reset: codexQuota.reset, updated: Date())
+        codexModel.recordDailySnapshots(for: [codexLater])
+        let codexLaterInfo = codexModel.dailyInfo(for: codexLater)
+        precondition(codexLaterInfo.budget == codexBudget && abs(codexLaterInfo.usedToday - 1) < 0.000001,
+                     "Codex weekly usage grows against the fixed daily budget")
+        let reloadedCodex = AppModel(defaults: codexDefaults, tokenLoader: { "unused" }, codexLoader: { [] })
+        precondition(reloadedCodex.dailyAnchors["codex-primary"] != nil && !reloadedCodex.showCursor,
+                     "Codex baseline and disabled Cursor survive restart")
+        codexModel.showCodex = false
+        precondition(codexModel.codex.isEmpty && !codexModel.toolbarTitle.contains("Cx"), "Hiding Codex clears its display")
         print("Passed model regression checks.")
     }
 

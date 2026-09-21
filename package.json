@@ -1,7 +1,7 @@
 {
   "name": "cadence",
-  "version": "1.1.0",
-  "description": "Daily pacing and quota management tool for Cursor Pro/Pro+",
+  "version": "1.3.2",
+  "description": "Menu bar quota monitor for Cursor and Codex",
   "type": "module",
   "scripts": {
     "build:mac": "bash macos/build.sh",
@@ -9,7 +9,7 @@
     "test:mac": "bash macos/test.sh",
     "package:mac": "bash macos/package.sh"
   },
-  "keywords": ["cursor", "usage", "quota", "pacer", "spending"],
+  "keywords": ["cursor", "codex", "usage", "quota", "pacer", "spending"],
   "author": "",
   "license": "MIT"
 }
