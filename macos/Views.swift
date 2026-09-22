@@ -131,9 +131,10 @@ struct CodexQuotaCard: View {
     var body: some View {
         let now = Date()
         let stale = quota.isStale(at: now) || failure != nil
-        let weekly = quota.name == "Codex · Weekly"
-        let daily: DailyBudgetInfo? = weekly && !stale
-            ? quota.dailyInfo(at: now, anchor: anchor, workdaysOnly: workdaysOnly) : nil
+        // Sub-day windows pace against the full window allowance by duration
+        // (see Quota.pacingDays), so the toggle passes through untouched.
+        let daily: DailyBudgetInfo? = stale
+            ? nil : quota.dailyInfo(at: now, anchor: anchor, workdaysOnly: workdaysOnly)
         let dailyAccent: Color = daily?.isOver == true ? .red : daily?.isWarning == true ? .orange : Self.purple
         VStack(alignment: .leading, spacing: 10) {
             HStack {
@@ -156,37 +157,35 @@ struct CodexQuotaCard: View {
             }
             MeterBar(fraction: quota.remaining / 100, solid: Self.purple,
                      label: "\(quota.name) remaining", value: String(format: "%.1f percent", quota.remaining))
-            if weekly {
-                VStack(alignment: .leading, spacing: 7) {
-                    HStack {
-                        Text("Today").font(.system(size: 12, weight: .medium))
-                        Spacer()
-                        if let daily, let budget = daily.budget {
-                            Text(String(format: "%.1f%% used / %.1f%% budget", daily.usedToday, budget))
-                                .font(.system(size: 12, weight: .semibold)).monospacedDigit()
-                                .foregroundStyle(dailyAccent)
-                        } else {
-                            Text("—").font(.system(size: 12)).foregroundStyle(.secondary)
-                        }
-                    }
+            VStack(alignment: .leading, spacing: 7) {
+                HStack {
+                    Text("Today").font(.system(size: 12, weight: .medium))
+                    Spacer()
                     if let daily, let budget = daily.budget {
-                        MeterBar(fraction: min(1, max(0, daily.fraction ?? 0)), solid: dailyAccent,
-                                 label: "\(quota.name) today versus budget",
-                                 value: String(format: "%.1f of %.1f percent", daily.usedToday, budget))
-                        if let over = daily.overBy {
-                            Text(String(format: "%.1f%% over today’s budget", over))
-                                .font(.system(size: 12, weight: .semibold)).foregroundStyle(.red)
-                        } else if let available = daily.available {
-                            Text(String(format: "%.1f%% available today", available))
-                                .font(.system(size: 12)).foregroundStyle(daily.isWarning ? .orange : .secondary)
-                        }
-                    } else if !stale && workdaysOnly {
-                        Text("No weekdays remain before reset.").font(.system(size: 12)).foregroundStyle(.secondary)
+                        Text(String(format: "%.1f%% used / %.1f%% budget", daily.usedToday, budget))
+                            .font(.system(size: 12, weight: .semibold)).monospacedDigit()
+                            .foregroundStyle(dailyAccent)
+                    } else {
+                        Text("—").font(.system(size: 12)).foregroundStyle(.secondary)
                     }
                 }
-                .padding(.horizontal, 10).padding(.vertical, 8)
-                .background(Self.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+                if let daily, let budget = daily.budget {
+                    MeterBar(fraction: min(1, max(0, daily.fraction ?? 0)), solid: dailyAccent,
+                             label: "\(quota.name) today versus budget",
+                             value: String(format: "%.1f of %.1f percent", daily.usedToday, budget))
+                    if let over = daily.overBy {
+                        Text(String(format: "%.1f%% over today’s budget", over))
+                            .font(.system(size: 12, weight: .semibold)).foregroundStyle(.red)
+                    } else if let available = daily.available {
+                        Text(String(format: "%.1f%% available today", available))
+                            .font(.system(size: 12)).foregroundStyle(daily.isWarning ? .orange : .secondary)
+                    }
+                } else if !stale && workdaysOnly {
+                    Text("No weekdays remain before reset.").font(.system(size: 12)).foregroundStyle(.secondary)
+                }
             }
+            .padding(.horizontal, 10).padding(.vertical, 8)
+            .background(Self.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
             Text("Resets \(quota.reset.formatted(date: .abbreviated, time: .shortened)) · \(quota.resetRemainingText(at: now))")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             if let failure { Text(failure).font(.system(size: 12)).foregroundStyle(.orange) }

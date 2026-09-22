@@ -11,8 +11,32 @@ struct Quota: Identifiable {
     let used: Double
     let reset: Date
     let updated: Date
+    /// Window length in minutes, when the provider reports it (Codex
+    /// rate-limit windows). Nil for Cursor/Grok pools, which pace by reset
+    /// date.
+    let windowMinutes: Double?
+    // Explicit init: a defaulted stored property is excluded from the
+    // implicit memberwise initializer on this toolchain, so the default
+    // lives here to keep existing construction sites compiling untouched.
+    init(id: String, name: String, used: Double, reset: Date, updated: Date, windowMinutes: Double? = nil) {
+        self.id = id
+        self.name = name
+        self.used = used
+        self.reset = reset
+        self.updated = updated
+        self.windowMinutes = windowMinutes
+    }
     var remaining: Double { max(0, 100 - used) }
     func isStale(at now: Date = Date()) -> Bool { reset <= now || now.timeIntervalSince(updated) > 180 }
+
+    /// Pacing divisor: sub-day windows always pace against the full window
+    /// allowance (1), regardless of which calendar dates the window touches.
+    /// Counting overlapping dates would halve a 22:00–03:00 budget, and
+    /// weekday-only pacing could zero a Saturday-to-Sunday window entirely.
+    func pacingDays(at now: Date = Date(), workdaysOnly: Bool = false, calendar: Calendar = .current) -> Int {
+        if let mins = windowMinutes, mins.isFinite, mins < 1440 { return 1 }
+        return daysLeft(at: now, workdaysOnly: workdaysOnly, calendar: calendar)
+    }
 
     func daysLeft(at now: Date = Date(), workdaysOnly: Bool = false, calendar: Calendar = .current) -> Int {
         guard reset > now else { return 0 }
@@ -53,7 +77,7 @@ struct Quota: Identifiable {
     }
 
     func safePerDay(at now: Date = Date(), workdaysOnly: Bool = false, calendar: Calendar = .current) -> Double? {
-        let days = daysLeft(at: now, workdaysOnly: workdaysOnly, calendar: calendar)
+        let days = pacingDays(at: now, workdaysOnly: workdaysOnly, calendar: calendar)
         return days > 0 ? remaining / Double(days) : nil
     }
 
@@ -68,14 +92,14 @@ struct Quota: Identifiable {
 
     /// Fixed morning budget as a share of the *total* provider quota.
     /// `anchor.startRemaining` is the morning balance; the divisor is the
-    /// number of days/weekdays remaining *that morning*, so the result stays
-    /// steady across refreshes while today's spend grows. Returns nil when no
-    /// days remain (e.g. weekend-only pacing with no weekdays left).
+    /// pacing days remaining *that morning*, so the result stays steady
+    /// across refreshes while today's spend grows. Returns nil when no days
+    /// remain (e.g. weekend-only pacing with no weekdays left). Sub-day
+    /// windows always divide by one (see `pacingDays`).
     func dailyBudget(at now: Date = Date(), anchor: DailyAnchor?, workdaysOnly: Bool = false, calendar: Calendar = .current) -> Double? {
         guard let anchor else { return safePerDay(at: now, workdaysOnly: workdaysOnly, calendar: calendar) }
         let morning = calendar.startOfDay(for: now)
-        let probe = Quota(id: id, name: name, used: 100 - anchor.startRemaining, reset: reset, updated: morning)
-        let days = probe.daysLeft(at: morning, workdaysOnly: workdaysOnly, calendar: calendar)
+        let days = pacingDays(at: morning, workdaysOnly: workdaysOnly, calendar: calendar)
         guard days > 0 else { return nil }
         return anchor.startRemaining / Double(days)
     }
@@ -175,7 +199,7 @@ enum DailyPacing {
     }
 
     /// Resolve the anchor to persist after observing `quota` at `now`.
-    /// - Same day: keep the morning baseline, refresh `lastUsed`.
+    /// - Same day: keep the morning baseline, refresh `lastUsed`/`reset`.
     /// - New day: baseline is the last observed usage so overnight spend
     ///   counts toward today; the morning balance is `100 - baseline` so the
     ///   new budget reflects pre-spend quota. Savings/overspend therefore
@@ -185,20 +209,30 @@ enum DailyPacing {
     ///   rather than showing negative usage.
     static func nextAnchor(for quota: Quota, now: Date = Date(), existing: DailyAnchor?, calendar: Calendar = .current) -> DailyAnchor {
         let today = dayKey(for: now, calendar: calendar)
-        guard let existing else {
-            return DailyAnchor(day: today, startUsed: quota.used, startRemaining: quota.remaining,
-                               reset: quota.reset, lastUsed: quota.used, lastDay: today)
+        func fresh() -> DailyAnchor {
+            DailyAnchor(day: today, startUsed: quota.used, startRemaining: quota.remaining,
+                        reset: quota.reset, lastUsed: quota.used, lastDay: today)
         }
-        let sameCycle = abs(existing.reset.timeIntervalSince(quota.reset)) < 1
-        guard sameCycle else {
-            return DailyAnchor(day: today, startUsed: quota.used, startRemaining: quota.remaining,
-                               reset: quota.reset, lastUsed: quota.used, lastDay: today)
+        guard let existing else { return fresh() }
+        // Windowed quotas (Codex) report rolling windows whose reset drifts a
+        // little every fetch. Only a jump of half a window length or more
+        // means a genuinely new window; smaller drift keeps the baseline so
+        // the budget stays fixed instead of tracking the live remaining.
+        // Non-windowed pools keep the exact check: any shift is a new cycle.
+        if let mins = quota.windowMinutes, mins.isFinite, mins > 0 {
+            guard abs(quota.reset.timeIntervalSince(existing.reset)) < 0.5 * mins * 60 else { return fresh() }
+        } else {
+            guard abs(quota.reset.timeIntervalSince(existing.reset)) < 1 else { return fresh() }
         }
         if existing.day == today {
             var updated = existing
-            if quota.used < existing.startUsed {
+            // Rolling windows breathe intraday as old usage falls out; only
+            // non-windowed pools treat a dip as a server correction. Display
+            // clamps at zero (see usedToday) so dips never show negative.
+            if quota.windowMinutes == nil, quota.used < existing.startUsed {
                 updated.startUsed = quota.used
             }
+            updated.reset = quota.reset
             updated.lastUsed = quota.used
             updated.lastDay = today
             return updated

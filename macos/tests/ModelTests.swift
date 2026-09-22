@@ -200,6 +200,25 @@ struct ModelTests {
         let codexLaterInfo = codexModel.dailyInfo(for: codexLater)
         precondition(codexLaterInfo.budget == codexBudget && abs(codexLaterInfo.usedToday - 1) < 0.000001,
                      "Codex weekly usage grows against the fixed daily budget")
+        // Regression: short windows (e.g. 5 hours) must also record a baseline
+        // through the refresh path — the old display-name filter dropped them,
+        // leaving a live estimate that shrank every refresh.
+        codexModel.refreshCodex()
+        await wait { codexPending.count == 1 }
+        let shortQuota = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 20,
+                               reset: Date().addingTimeInterval(5 * 3600), updated: Date(),
+                               windowMinutes: 300)
+        codexPending.complete(.success([shortQuota]))
+        await wait { !codexModel.codexRefreshing }
+        let shortBudget = codexModel.dailyInfo(for: shortQuota).budget
+        precondition(shortBudget == 80 && codexModel.dailyInfo(for: shortQuota).usedToday == 0,
+                     "Short Codex windows record a fixed full-window baseline through refresh")
+        let shortLater = Quota(id: shortQuota.id, name: shortQuota.name, used: 23.5,
+                               reset: shortQuota.reset.addingTimeInterval(120), updated: Date(), windowMinutes: 300)
+        codexModel.recordDailySnapshots(for: [shortLater])
+        let shortLaterInfo = codexModel.dailyInfo(for: shortLater)
+        precondition(shortLaterInfo.budget == shortBudget && abs(shortLaterInfo.usedToday - 3.5) < 0.000001,
+                     "Short-window usage grows against the fixed budget, not a shrinking estimate")
         let reloadedCodex = AppModel(defaults: codexDefaults, tokenLoader: { "unused" }, codexLoader: { [] })
         precondition(reloadedCodex.dailyAnchors["codex-primary"] != nil && !reloadedCodex.showCursor,
                      "Codex baseline and disabled Cursor survive restart")

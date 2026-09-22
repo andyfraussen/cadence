@@ -50,7 +50,8 @@ enum CodexUsage {
             else if minutes >= 60 { let value = Int(minutes / 60); label = "\(value) \(value == 1 ? "hour" : "hours")" }
             else { let value = Int(minutes); label = "\(value) \(value == 1 ? "minute" : "minutes")" }
             quotas.append(Quota(id: "codex-\(key)", name: "Codex · \(label)", used: used,
-                                reset: Date(timeIntervalSince1970: resetSeconds), updated: now))
+                                reset: Date(timeIntervalSince1970: resetSeconds), updated: now,
+                                windowMinutes: minutes))
         }
         guard !quotas.isEmpty else { throw UsageError.message("Codex has no active usage windows for this account.") }
         return quotas.sorted { $0.reset.timeIntervalSince(now) < $1.reset.timeIntervalSince(now) }

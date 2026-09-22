@@ -50,11 +50,13 @@ struct Tests {
         let codex = try CodexUsage.parse(codexJSON, at: now)
         check(codex.count == 1 && codex[0].name == "Codex · Weekly" && codex[0].remaining == 67, "Codex weekly limit parsed")
         check(codex[0].reset.timeIntervalSince1970 == 1790338564, "Codex reset is seconds")
+        check(codex[0].windowMinutes == 10080, "Codex window duration is kept for pacing")
         let twoWindows = Data("""
         {"id":2,"result":{"rateLimitsByLimitId":{"codex":{"primary":{"usedPercent":20,"windowDurationMins":300,"resetsAt":1790330000},"secondary":{"usedPercent":40,"windowDurationMins":10080,"resetsAt":1790338564}}}}}
         """.utf8)
         let both = try CodexUsage.parse(twoWindows, at: now)
         check(both.count == 2 && both[0].name == "Codex · 5 hours" && both[1].name == "Codex · Weekly", "Codex shows both returned windows")
+        check(both[0].windowMinutes == 300 && both[1].windowMinutes == 10080, "Each Codex window keeps its own duration")
         do { _ = try CodexUsage.parse(Data("{\"id\":2,\"result\":{}}".utf8), at: now); preconditionFailure("Missing Codex limit was accepted") }
         catch { assertions += 1 }
         let zero = try UsageParser.monthly(Data("""
@@ -229,6 +231,71 @@ struct Tests {
         let encoded = try JSONEncoder().encode(nextAnchor)
         let decoded = try JSONDecoder().decode(DailyAnchor.self, from: encoded)
         check(decoded == nextAnchor, "Daily anchor is Codable for persistence")
+        // Short Codex windows pace by duration, not reset date: the budget is
+        // the full window remaining and spend grows against it instead of
+        // shrinking the budget.
+        let windowStart = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 10))!
+        let windowLater = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 13))!
+        let windowReset = windowStart.addingTimeInterval(5 * 3600)
+        let shortMorning = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 20, reset: windowReset, updated: windowStart, windowMinutes: 300)
+        let shortAnchor = DailyPacing.nextAnchor(for: shortMorning, now: windowStart, existing: nil, calendar: calendar)
+        let shortInfo = shortMorning.dailyInfo(at: windowStart, anchor: shortAnchor, calendar: calendar)
+        close(shortInfo.budget, 80, "Short-window budget is the full window remaining")
+        check(shortInfo.usedToday == 0, "Short-window spend starts at zero")
+        let shortAfternoon = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 23.5, reset: windowReset, updated: windowLater, windowMinutes: 300)
+        let shortSame = DailyPacing.nextAnchor(for: shortAfternoon, now: windowLater, existing: shortAnchor, calendar: calendar)
+        let shortLaterInfo = shortAfternoon.dailyInfo(at: windowLater, anchor: shortSame, calendar: calendar)
+        close(shortLaterInfo.budget, 80, "Short-window budget holds steady intraday")
+        check(abs(shortLaterInfo.usedToday - 3.5) < 0.000001, "Short-window spend grows against the fixed budget")
+        // A fresh window (changed reset) starts a new baseline even the same day.
+        let nextWindowReset = windowReset.addingTimeInterval(5 * 3600)
+        let nextWindow = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 2, reset: nextWindowReset, updated: windowLater, windowMinutes: 300)
+        let nextWindowAnchor = DailyPacing.nextAnchor(for: nextWindow, now: windowLater, existing: shortSame, calendar: calendar)
+        check(nextWindow.dailyInfo(at: windowLater, anchor: nextWindowAnchor, calendar: calendar).usedToday == 0, "New window starts a fresh baseline")
+        // A 22:00–03:00 window touches two calendar dates but still paces
+        // against the full allowance — date-counting would halve it to 40.
+        let lateStart = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 23))!
+        let lateReset = calendar.date(from: DateComponents(year: 2026, month: 9, day: 18, hour: 3))!
+        let lateQuota = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 20, reset: lateReset, updated: lateStart, windowMinutes: 300)
+        check(lateQuota.daysLeft(at: lateStart, calendar: calendar) == 2, "Date-counting still sees two dates")
+        let lateAnchor = DailyPacing.nextAnchor(for: lateQuota, now: lateStart, existing: nil, calendar: calendar)
+        close(lateQuota.dailyInfo(at: lateStart, anchor: lateAnchor, calendar: calendar).budget, 80, "Midnight-crossing windows keep the full budget")
+        // A Saturday-to-Sunday window with weekday-only pacing still has a
+        // budget: duration pacing ignores the toggle for sub-day windows.
+        let satNight = calendar.date(from: DateComponents(year: 2026, month: 9, day: 19, hour: 22))!
+        let sunMorning = calendar.date(from: DateComponents(year: 2026, month: 9, day: 20, hour: 2))!
+        let weekendWindow = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 20, reset: sunMorning, updated: satNight, windowMinutes: 300)
+        let weekendAnchor = DailyPacing.nextAnchor(for: weekendWindow, now: satNight, existing: nil, calendar: calendar)
+        close(weekendWindow.dailyInfo(at: satNight, anchor: weekendAnchor, workdaysOnly: true, calendar: calendar).budget, 80, "Weekend short windows keep a budget with weekday pacing")
+        // Rolling windows drift their reset a little every fetch: the baseline
+        // must survive that drift, or the budget tracks the live remaining
+        // (12 → 11.8) instead of staying fixed while usage grows.
+        let rollQ0 = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 20, reset: windowReset, updated: windowStart, windowMinutes: 300)
+        let rollA0 = DailyPacing.nextAnchor(for: rollQ0, now: windowStart, existing: nil, calendar: calendar)
+        let rollQ1 = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 21.5, reset: windowReset.addingTimeInterval(60), updated: windowLater, windowMinutes: 300)
+        let rollA1 = DailyPacing.nextAnchor(for: rollQ1, now: windowLater, existing: rollA0, calendar: calendar)
+        check(rollA1.startUsed == 20 && rollA1.startRemaining == 80, "Reset drift keeps the morning baseline")
+        check(rollA1.reset == windowReset.addingTimeInterval(60), "Drifted reset is tracked so drift never accumulates")
+        close(rollQ1.dailyInfo(at: windowLater, anchor: rollA1, calendar: calendar).budget, 80, "Budget stays fixed while a rolling window drifts")
+        check(abs(rollQ1.dailyInfo(at: windowLater, anchor: rollA1, calendar: calendar).usedToday - 1.5) < 0.000001, "Usage grows against the fixed budget during drift")
+        let rollQ2 = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 23.5, reset: windowReset.addingTimeInterval(120), updated: windowLater, windowMinutes: 300)
+        let rollA2 = DailyPacing.nextAnchor(for: rollQ2, now: windowLater, existing: rollA1, calendar: calendar)
+        close(rollQ2.dailyInfo(at: windowLater, anchor: rollA2, calendar: calendar).budget, 80, "Budget still fixed after continued drift")
+        // A jump of half a window length or more is a genuinely new window.
+        let jumped = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 2, reset: windowReset.addingTimeInterval(9000), updated: windowLater, windowMinutes: 300)
+        let jumpedAnchor = DailyPacing.nextAnchor(for: jumped, now: windowLater, existing: rollA2, calendar: calendar)
+        check(jumped.dailyInfo(at: windowLater, anchor: jumpedAnchor, calendar: calendar).usedToday == 0, "Full-window reset jump starts a fresh baseline")
+        // Intraday dips (old usage falling out of a rolling window) don't
+        // rewind the baseline; the display clamps at zero instead.
+        let dipRolling = Quota(id: "codex-primary", name: "Codex · 5 hours", used: 18, reset: windowReset.addingTimeInterval(180), updated: windowLater, windowMinutes: 300)
+        let rollDipAnchor = DailyPacing.nextAnchor(for: dipRolling, now: windowLater, existing: rollA2, calendar: calendar)
+        check(rollDipAnchor.startUsed == 20, "Rolling dips keep the morning baseline")
+        check(dipRolling.dailyInfo(at: windowLater, anchor: rollDipAnchor, calendar: calendar).usedToday == 0, "Dips below baseline show zero, not negative")
+        // Non-windowed pools keep the exact reset check: any shift is a new cycle.
+        let exactA = DailyPacing.nextAnchor(for: morningQuota, now: morning, existing: nil, calendar: calendar)
+        let shiftedCycle = Quota(id: "C", name: "Cursor", used: 31, reset: budgetReset.addingTimeInterval(30), updated: afternoon)
+        let shiftedAnchor = DailyPacing.nextAnchor(for: shiftedCycle, now: afternoon, existing: exactA, calendar: calendar)
+        check(shiftedAnchor.startUsed == 31, "Cursor reset shifts still start a fresh baseline")
 
         try checkSQLiteFixture()
         print("Passed \(assertions) parser and pacing checks.")

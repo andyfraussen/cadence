@@ -106,9 +106,12 @@ final class AppModel: ObservableObject {
     private static func dailyKey(for id: String) -> String { "dailyAnchor.\(id)" }
 
     private static func loadDailyAnchors(from defaults: UserDefaults) -> [String: DailyAnchor] {
+        // Scan by prefix instead of hardcoding ids so new providers or
+        // windows persist without a code change. Keys are "dailyAnchor.<id>".
         var result: [String: DailyAnchor] = [:]
-        for id in ["C", "O", "G", "codex-primary", "codex-secondary"] {
-            guard let data = defaults.data(forKey: dailyKey(for: id)) else { continue }
+        for key in defaults.dictionaryRepresentation().keys where key.hasPrefix("dailyAnchor.") {
+            let id = String(key.dropFirst("dailyAnchor.".count))
+            guard !id.isEmpty, let data = defaults.data(forKey: key) else { continue }
             guard let anchor = try? JSONDecoder().decode(DailyAnchor.self, from: data) else { continue }
             guard anchor.startUsed.isFinite, anchor.startRemaining.isFinite, anchor.lastUsed.isFinite else { continue }
             result[id] = anchor
@@ -217,7 +220,11 @@ final class AppModel: ObservableObject {
             switch result {
             case .success(let quotas):
                 codex = quotas; codexError = nil
-                recordDailySnapshots(for: quotas.filter { $0.name == "Codex · Weekly" })
+                // Every window gets a fixed baseline, whatever its length.
+                // Short windows (e.g. 5 hours) roll via reset-change detection
+                // in DailyPacing; filtering by display name silently dropped
+                // them, leaving a live estimate that shrank every refresh.
+                recordDailySnapshots(for: quotas)
             case .failure(let error): codexError = error.localizedDescription
             }
             codexRefreshing = false
