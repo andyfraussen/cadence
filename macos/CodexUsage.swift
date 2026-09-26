@@ -1,3 +1,4 @@
+import CoreFoundation
 import Foundation
 
 /// Reads the signed-in Codex account through the documented local app-server.
@@ -5,9 +6,22 @@ import Foundation
 enum CodexUsage {
     static func executables() -> [String] {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
+        // ChatGPT moved the bundled binary from `.../Resources/codex` to
+        // `.../Resources/codex-cli/bin/codex` (shim) and
+        // `.../Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex`
+        // (real binary). Keep the old location for older ChatGPT builds and
+        // probe the standalone Codex app in the same layouts.
         var paths = [ProcessInfo.processInfo.environment["CODEX_BIN"],
+                     "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+                     "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
                      "/Applications/ChatGPT.app/Contents/Resources/codex",
+                     home + "/Applications/ChatGPT.app/Contents/Resources/codex-cli/bin/codex",
+                     home + "/Applications/ChatGPT.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
                      home + "/Applications/ChatGPT.app/Contents/Resources/codex",
+                     "/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex",
+                     "/Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
+                     home + "/Applications/Codex.app/Contents/Resources/codex-cli/bin/codex",
+                     home + "/Applications/Codex.app/Contents/Resources/codex-cli/CodexCLI.app/Contents/MacOS/codex",
                      "/opt/homebrew/bin/codex", "/usr/local/bin/codex", home + "/.local/bin/codex",
                      home + "/.bun/bin/codex"].compactMap { $0 }
         let nvm = home + "/.nvm/versions/node"
@@ -22,6 +36,12 @@ enum CodexUsage {
 
     static func executable() -> String? {
         executables().first
+    }
+
+    private static func number(_ value: Any?) -> Double? {
+        guard let number = value as? NSNumber, CFGetTypeID(number) != CFBooleanGetTypeID() else { return nil }
+        let result = number.doubleValue
+        return result.isFinite ? result : nil
     }
 
     static func parse(_ data: Data, at now: Date = Date()) throws -> [Quota] {
@@ -39,16 +59,22 @@ enum CodexUsage {
         var quotas: [Quota] = []
         for key in ["primary", "secondary"] {
             guard let window = limits[key] as? [String: Any],
-                  let used = window["usedPercent"] as? Double,
-                  let minutes = window["windowDurationMins"] as? Double,
-                  let resetSeconds = window["resetsAt"] as? Double,
-                  used.isFinite, (0...100).contains(used), minutes > 0, minutes.isFinite,
-                  resetSeconds.isFinite, resetSeconds > now.timeIntervalSince1970 - 60 else { continue }
+                  let used = number(window["usedPercent"]),
+                  let resetSeconds = number(window["resetsAt"]),
+                  (0...100).contains(used),
+                  resetSeconds > now.timeIntervalSince1970 - 60 else { continue }
+            // windowDurationMins became nullable in newer app-server schemas;
+            // keep the window when only the duration is missing and pace it by
+            // reset date (windowMinutes nil). resetsAt is still required.
+            let minutes = number(window["windowDurationMins"])
+            if let minutes, !(minutes > 0) { continue }
             let label: String
-            if minutes >= 10080 { label = "Weekly" }
-            else if minutes >= 1440 { let value = Int(minutes / 1440); label = "\(value) \(value == 1 ? "day" : "days")" }
-            else if minutes >= 60 { let value = Int(minutes / 60); label = "\(value) \(value == 1 ? "hour" : "hours")" }
-            else { let value = Int(minutes); label = "\(value) \(value == 1 ? "minute" : "minutes")" }
+            if let minutes {
+                if minutes >= 10080 { label = "Weekly" }
+                else if minutes >= 1440 { let value = Int(minutes / 1440); label = "\(value) \(value == 1 ? "day" : "days")" }
+                else if minutes >= 60 { let value = Int(minutes / 60); label = "\(value) \(value == 1 ? "hour" : "hours")" }
+                else { let value = Int(minutes); label = "\(value) \(value == 1 ? "minute" : "minutes")" }
+            } else { label = "Usage" }
             quotas.append(Quota(id: "codex-\(key)", name: "Codex · \(label)", used: used,
                                 reset: Date(timeIntervalSince1970: resetSeconds), updated: now,
                                 windowMinutes: minutes))
@@ -96,7 +122,7 @@ enum CodexUsage {
             try? errors.fileHandleForReading.close()
         }
         let requests: [[String: Any]] = [
-            ["method": "initialize", "id": 1, "params": ["clientInfo": ["name": "cadence", "title": "Cadence", "version": "1.3.2"]]],
+            ["method": "initialize", "id": 1, "params": ["clientInfo": ["name": "cadence", "title": "Cadence", "version": "1.3.3"]]],
             ["method": "initialized", "params": [:]],
             ["method": "account/rateLimits/read", "id": 2, "params": [:]]
         ]
