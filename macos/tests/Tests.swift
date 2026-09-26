@@ -291,6 +291,27 @@ struct Tests {
         let rollDipAnchor = DailyPacing.nextAnchor(for: dipRolling, now: windowLater, existing: rollA2, calendar: calendar)
         check(rollDipAnchor.startUsed == 20, "Rolling dips keep the morning baseline")
         check(dipRolling.dailyInfo(at: windowLater, anchor: rollDipAnchor, calendar: calendar).usedToday == 0, "Dips below baseline show zero, not negative")
+        // A weekly reset that lands just under half a window later (~3.48d
+        // < 3.5d) is a new cycle, not drift. Regression: Sep 2026 Codex
+        // reset Sep 30 → Oct 3 with usage 38% → 2% was mistaken for drift,
+        // pinning today's spend at zero for the rest of the cycle.
+        let cycleDay = calendar.date(from: DateComponents(year: 2026, month: 9, day: 26, hour: 12))!
+        let resetSep30 = calendar.date(from: DateComponents(year: 2026, month: 9, day: 30, hour: 7, minute: 8))!
+        let resetOct3 = resetSep30.addingTimeInterval(300553)
+        let preReset = Quota(id: "codex-primary", name: "Codex · Weekly", used: 38, reset: resetSep30, updated: cycleDay, windowMinutes: 10080)
+        let preAnchor = DailyPacing.nextAnchor(for: preReset, now: cycleDay, existing: nil, calendar: calendar)
+        let postReset = Quota(id: "codex-primary", name: "Codex · Weekly", used: 2, reset: resetOct3, updated: cycleDay, windowMinutes: 10080)
+        let postAnchor = DailyPacing.nextAnchor(for: postReset, now: cycleDay, existing: preAnchor, calendar: calendar)
+        check(postAnchor.startUsed == 2 && postAnchor.startRemaining == 98, "Weekly reset starts a fresh baseline")
+        check(postReset.dailyInfo(at: cycleDay, anchor: postAnchor, calendar: calendar).usedToday == 0, "Fresh cycle spend starts at zero")
+        // Repair path: an anchor whose reset already drifted onto the new
+        // cycle before the fix (startUsed 38 vs used 2, same day) still
+        // starts fresh via the plunge rule instead of clamping at zero.
+        let dayKey = DailyPacing.dayKey(for: cycleDay, calendar: calendar)
+        let drifted = DailyAnchor(day: dayKey, startUsed: 38, startRemaining: 62, reset: resetOct3, lastUsed: 2, lastDay: dayKey)
+        let repaired = DailyPacing.nextAnchor(for: postReset, now: cycleDay, existing: drifted, calendar: calendar)
+        check(repaired.startUsed == 2 && repaired.startRemaining == 98, "Same-day plunge repairs a stale baseline")
+        check(postReset.dailyInfo(at: cycleDay, anchor: repaired, calendar: calendar).usedToday == 0, "Repaired baseline shows zero spend, not negative")
         // Non-windowed pools keep the exact reset check: any shift is a new cycle.
         let exactA = DailyPacing.nextAnchor(for: morningQuota, now: morning, existing: nil, calendar: calendar)
         let shiftedCycle = Quota(id: "C", name: "Cursor", used: 31, reset: budgetReset.addingTimeInterval(30), updated: afternoon)

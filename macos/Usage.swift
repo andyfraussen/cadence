@@ -215,16 +215,26 @@ enum DailyPacing {
         }
         guard let existing else { return fresh() }
         // Windowed quotas (Codex) report rolling windows whose reset drifts a
-        // little every fetch. Only a jump of half a window length or more
-        // means a genuinely new window; smaller drift keeps the baseline so
-        // the budget stays fixed instead of tracking the live remaining.
-        // Non-windowed pools keep the exact check: any shift is a new cycle.
+        // little every fetch (observed: seconds to minutes). Cap the drift
+        // tolerance at one hour so a genuinely new window still starts fresh:
+        // a weekly reset landing ~3.4 days later falls just under half a
+        // 7-day window and was once mistaken for drift, pinning today's
+        // spend at zero for the rest of the cycle. Non-windowed pools keep
+        // the exact check: any shift is a new cycle.
         if let mins = quota.windowMinutes, mins.isFinite, mins > 0 {
-            guard abs(quota.reset.timeIntervalSince(existing.reset)) < 0.5 * mins * 60 else { return fresh() }
+            guard abs(quota.reset.timeIntervalSince(existing.reset)) < min(0.5 * mins * 60, 3600) else { return fresh() }
         } else {
             guard abs(quota.reset.timeIntervalSince(existing.reset)) < 1 else { return fresh() }
         }
         if existing.day == today {
+            // Same-day plunge far below the morning baseline means the quota
+            // was reset (e.g. weekly Codex 38% → 2%), not rolling-window
+            // noise — and repairs anchors whose reset already drifted onto
+            // the new cycle. Small dips stay on the morning baseline and
+            // display zero (see usedToday).
+            if quota.windowMinutes != nil, existing.startUsed - quota.used > 5 {
+                return fresh()
+            }
             var updated = existing
             // Rolling windows breathe intraday as old usage falls out; only
             // non-windowed pools treat a dip as a server correction. Display
