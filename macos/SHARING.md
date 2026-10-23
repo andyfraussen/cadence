@@ -1,4 +1,4 @@
-# Cadence 1.1.0
+# Cadence 1.3.5
 
 A small, independent macOS menu bar app for Cursor Models, Other Models, and Grok Bot usage. Requires macOS 13 or later. The universal build includes Apple Silicon and Intel binaries.
 
@@ -6,14 +6,15 @@ A small, independent macOS menu bar app for Cursor Models, Other Models, and Gro
 
 1. Unzip the download and drag Cadence.app into Applications.
 2. Open the app. Click its Cadence C icon or usage percentages in the menu bar.
-3. Sign in to the Cursor desktop app. Cadence picks up that session automatically.
-4. Open Settings to choose logo only, limits only, or both; show/hide Grok Bot; use weekday pacing; and enable Launch at Login.
+3. Sign in to the Cursor desktop app.
+4. When macOS asks Cadence to use the “Cursor Safe Storage” keychain item, enter the password for this Mac and choose **Always Allow**. That is the Mac login password, not your Google password. Later refreshes stay quiet unless you press **Retry**.
+5. Open Settings to choose logo only, limits only, or both; show/hide Grok Bot; use weekday pacing; and enable Launch at Login.
 
 No Node, npm, Python, web server, or project folder is needed to run the built app.
 
 ## Automatic Session Sync
 
-Cadence automatically detects and reads your active Cursor desktop app session from local storage (`state.vscdb`) each time usage refreshes. No manual token entry, copying/pasting, or configuration is required. Ensure you are signed in to the Cursor desktop app on your Mac.
+Cadence reads your active Cursor desktop session from local storage (`state.vscdb`) each time usage refreshes. Current Cursor builds seal that session in the macOS login keychain, so the first successful refresh asks for this Mac’s login password. Choose **Always Allow**. No manual token entry, copying/pasting, or configuration is required. Stay signed in to the Cursor desktop app on your Mac.
 
 ## Read the numbers
 
@@ -27,13 +28,13 @@ Cadence automatically detects and reads your active Cursor desktop app session f
 
 ## Privacy and compatibility
 
-The app reads Cursor's local database in read-only mode and authenticates requests to Cursor's HTTPS API. It does not use analytics or a third-party server. Usage is held in memory; appearance preferences are local. Legacy manual-mode preferences migrate to automatic authentication; old Keychain entries are left untouched and unused. It uses undocumented endpoints and may require updates if Cursor changes them. No affiliation with Cursor or xAI is implied.
+The app reads Cursor's local database in read-only mode and authenticates requests to Cursor's HTTPS API. When the session is sealed, it decrypts it with the login keychain and keeps that key in memory for the rest of the launch. It does not use analytics or a third-party server. Usage is held in memory; appearance preferences are local. Legacy manual-mode preferences migrate to automatic authentication; old Keychain entries are left untouched and unused. It uses undocumented endpoints and may require updates if Cursor changes them. No affiliation with Cursor or xAI is implied.
 
 ## Distribution status & Gatekeeper
 
 This build is ad-hoc signed. When downloaded over the internet, macOS Gatekeeper may block execution or show a security warning because it is not signed with a paid Apple Developer ID certificate or notarized by Apple.
 
-- **Before opening a downloaded build**: Verify its source and compare its checksum with a trusted release. From the folder containing the ZIP and checksum, run `shasum -a 256 -c Cadence-1.1.0-universal.zip.sha256`. A checksum detects corruption, not publisher identity.
+- **Before opening a downloaded build**: Verify its source and compare its checksum with a trusted release. From the folder containing the ZIP and checksum, run `shasum -a 256 -c Cadence-1.3.5-universal.zip.sha256`. A checksum detects corruption, not publisher identity.
 - **For a build you trust**: Use System Settings → Privacy & Security → **Open Anyway**, if available for your macOS version and policy. Do not disable Gatekeeper or remove unrelated extended attributes.
 - **Building from source**: Review the code and run `npm run build:mac` or `bash macos/build.sh`. This generally avoids download quarantine, but local signing does not guarantee trust or suppress every security warning.
 - **For official notarized releases**: The maintainer must sign with an Apple Developer ID Application certificate and notarize via `xcrun notarytool` as detailed below.

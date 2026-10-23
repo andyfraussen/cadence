@@ -171,8 +171,10 @@ final class AppModel: ObservableObject {
         grokRefreshing = false
     }
 
-    /// Manual refresh. Always runs; used by popover open, Retry, and auth changes.
-    func refresh() {
+    /// Refresh. Retry, the refresh button, and launch may ask for the Mac
+    /// login password. The timer, wake, and opening the menu pass
+    /// `allowKeychainPrompt: false` so a dismissed dialog stays dismissed.
+    func refresh(allowKeychainPrompt: Bool = true) {
         guard !demo else {
             recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex)
             onDisplayChange?()
@@ -182,6 +184,7 @@ final class AppModel: ObservableObject {
         guard showCursor else { onDisplayChange?(); return }
         // Debounce concurrent token loads; fetch tasks debounce individually below.
         guard tokenTask == nil else { onDisplayChange?(); return }
+        Authentication.promptsAllowed = allowKeychainPrompt
         tokenLoading = true
         onDisplayChange?()
         let current = generation
@@ -234,14 +237,15 @@ final class AppModel: ObservableObject {
     }
 
     /// Automatic refresh for the 60s timer. Skips while in exponential backoff
-    /// so an offline or failing backend does not hammer the API.
+    /// so an offline or failing backend does not hammer the API. Does not
+    /// raise the Mac keychain dialog; Retry does that.
     func refreshIfDue(at now: Date = Date()) {
         if showCursor, let until = backoffUntil, now < until {
             refreshCodex()
             updateMenuBarOnly()
             return
         }
-        refresh()
+        refresh(allowKeychainPrompt: false)
     }
 
     private func updateMenuBarOnly() { onDisplayChange?() }

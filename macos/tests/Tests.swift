@@ -319,6 +319,7 @@ struct Tests {
         check(shiftedAnchor.startUsed == 31, "Cursor reset shifts still start a fresh baseline")
 
         try checkSQLiteFixture()
+        try checkSealedSession()
         print("Passed \(assertions) parser and pacing checks.")
         if CommandLine.arguments.contains("--live") {
             let token = try await Authentication.automaticToken()
@@ -354,6 +355,34 @@ struct Tests {
         do {
             _ = try Authentication.readToken(at: path + ".missing")
             preconditionFailure("Missing database was accepted")
+        } catch { }
+    }
+
+    /// Chromium v10 vector: PBKDF2-HMAC-SHA1("test-password", "saltysalt", 1003)
+    /// then AES-128-CBC with a 16-space IV. Must not touch the login keychain.
+    static func checkSealedSession() throws {
+        let sealed = "cursor-safe-storage:v1:djEw77xs6FstqXHTkNQZV4NHBc2Jh0XFiSL1NgQhHYbcTfs="
+        let password = Data("test-password".utf8)
+        let opened = try CursorSessionSeal.decrypt(sealed, password: password)
+        precondition(opened == "fixture-token-123", "Sealed session decrypts")
+        do {
+            _ = try CursorSessionSeal.decrypt(sealed, password: Data("google-password".utf8))
+            preconditionFailure("Wrong keychain password was accepted")
+        } catch { }
+        let path = FileManager.default.temporaryDirectory
+            .appendingPathComponent("cadence-sealed-\(UUID().uuidString).vscdb").path
+        defer { try? FileManager.default.removeItem(atPath: path) }
+        var db: OpaquePointer?
+        precondition(sqlite3_open(path, &db) == SQLITE_OK, "Sealed fixture database opens")
+        defer { sqlite3_close(db) }
+        precondition(sqlite3_exec(db, "CREATE TABLE ItemTable(key TEXT PRIMARY KEY, value TEXT)", nil, nil, nil) == SQLITE_OK, "Sealed fixture table creates")
+        let sql = "INSERT INTO ItemTable(key, value) VALUES('cursorAuth/accessToken', '\(sealed)')"
+        precondition(sqlite3_exec(db, sql, nil, nil, nil) == SQLITE_OK, "Sealed fixture token inserts")
+        let unwrapped = try Authentication.readToken(at: path, password: password)
+        precondition(unwrapped == "fixture-token-123", "Sealed database token is unwrapped")
+        do {
+            _ = try Authentication.readToken(at: path, password: Data("google-password".utf8))
+            preconditionFailure("Sealed database accepted the wrong password")
         } catch { }
     }
 }

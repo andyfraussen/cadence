@@ -93,7 +93,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         if popover.isShown { closePopover() }
         else if let button = item.button { showPopover(from: button) }
     }
-    @objc private func woke() { updateMenuBar(); model.refresh() }
+    @objc private func woke() { updateMenuBar(); model.refresh(allowKeychainPrompt: false) }
     @objc private func appResignedActive() { closePopover() }
 
     func applicationWillTerminate(_ notification: Notification) {
@@ -107,7 +107,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
 
     private func showPopover(from button: NSStatusBarButton) {
         configurePopover()
-        model.refresh()
+        model.refresh(allowKeychainPrompt: false)
         popover.show(relativeTo: button.bounds, of: button, preferredEdge: .minY)
         NSApp.activate(ignoringOtherApps: true)
         startPopoverMonitors()

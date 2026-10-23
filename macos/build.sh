@@ -20,7 +20,7 @@ for architecture in "${architectures[@]}"; do
   binary="$PWD/.build/Cadence-$architecture"
   xcrun swiftc macos/main.swift macos/Usage.swift macos/Authentication.swift macos/CodexUsage.swift macos/AppModel.swift macos/Views.swift \
     -o "$binary" -O -warn-concurrency -target "$architecture-apple-macosx13.0" \
-    -module-cache-path "$CACHE" -framework AppKit -framework SwiftUI -framework ServiceManagement -framework Security -framework Network -lsqlite3
+    -module-cache-path "$CACHE" -framework AppKit -framework SwiftUI -framework ServiceManagement -framework Security -framework LocalAuthentication -framework Network -lsqlite3
   binaries+=("$binary")
 done
 if [[ "${#binaries[@]}" == 1 ]]; then
