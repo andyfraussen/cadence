@@ -34,7 +34,7 @@ The app reads Cursor's local database in read-only mode and authenticates reques
 
 This build is ad-hoc signed. When downloaded over the internet, macOS Gatekeeper may block execution or show a security warning because it is not signed with a paid Apple Developer ID certificate or notarized by Apple.
 
-- **Before opening a downloaded build**: Verify its source and compare its checksum with a trusted release. From the folder containing the ZIP and checksum, run `shasum -a 256 -c Cadence-1.3.5-universal.zip.sha256`. A checksum detects corruption, not publisher identity.
+- **Before opening a downloaded build**: Verify its source and compare its checksum with a trusted release. From the folder containing the ZIP and checksum, run `shasum -a 256 -c Cadence-1.4.0-universal.zip.sha256`. A checksum detects corruption, not publisher identity.
 - **For a build you trust**: Use System Settings → Privacy & Security → **Open Anyway**, if available for your macOS version and policy. Do not disable Gatekeeper or remove unrelated extended attributes.
 - **Building from source**: Review the code and run `npm run build:mac` or `bash macos/build.sh`. This generally avoids download quarantine, but local signing does not guarantee trust or suppress every security warning.
 - **For official notarized releases**: The maintainer must sign with an Apple Developer ID Application certificate and notarize via `xcrun notarytool` as detailed below.
