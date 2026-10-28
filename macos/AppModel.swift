@@ -60,7 +60,7 @@ final class AppModel: ObservableObject {
                 claudeGeneration += 1
                 claudeTask?.cancel(); claudeTask = nil
                 claudeRefreshing = false; claude = []; claudeError = nil
-                claudeFailures = 0; claudeBackoffUntil = nil
+                claudeFailures = 0; claudeNextCheck = nil
             }
             onDisplayChange?()
         }
@@ -80,7 +80,10 @@ final class AppModel: ObservableObject {
     private var claudeTask: Task<Void, Never>?
     private var claudeGeneration = 0
     private var claudeFailures = 0
-    private var claudeBackoffUntil: Date?
+    /// Earliest time an automatic check may run. Set after every attempt so
+    /// the minute timer, popover opens and wakes cannot poll faster than
+    /// `ClaudeUsage.checkInterval`; Retry ignores it.
+    private var claudeNextCheck: Date?
     private var lastToken: String?
     private var consecutiveFailures = 0
     private var backoffUntil: Date?
@@ -264,11 +267,12 @@ final class AppModel: ObservableObject {
         }
     }
 
-    /// `respectBackoff` is set by automatic refreshes so a rate-limited or
-    /// signed-out Claude is not polled every minute; Retry bypasses it.
+    /// `respectBackoff` is set by automatic refreshes so Claude is checked at
+    /// most every `ClaudeUsage.checkInterval` (longer after failures); Retry
+    /// bypasses it.
     func refreshClaude(allowKeychainPrompt: Bool = true, respectBackoff: Bool = false) {
         guard showClaude, !demo, claudeTask == nil else { return }
-        if respectBackoff, let until = claudeBackoffUntil, Date() < until { return }
+        if respectBackoff, let until = claudeNextCheck, Date() < until { return }
         claudeRefreshing = true
         claudeGeneration += 1
         let request = claudeGeneration
@@ -280,13 +284,15 @@ final class AppModel: ObservableObject {
             switch result {
             case .success(let quotas):
                 claude = quotas; claudeError = nil
-                claudeFailures = 0; claudeBackoffUntil = nil
+                claudeFailures = 0
+                claudeNextCheck = Date().addingTimeInterval(ClaudeUsage.checkInterval)
                 recordDailySnapshots(for: quotas)
             case .failure(let error):
                 claudeError = error.localizedDescription
                 claudeFailures += 1
-                let delay = min(900.0, 60.0 * pow(2.0, Double(max(0, claudeFailures - 1))))
-                claudeBackoffUntil = Date().addingTimeInterval(delay)
+                let step = min(ClaudeUsage.maxBackoff, ClaudeUsage.checkInterval * pow(2.0, Double(max(0, claudeFailures - 1))))
+                let requested = (error as? ClaudeUsage.RateLimited)?.retryAfter ?? 0
+                claudeNextCheck = Date().addingTimeInterval(min(ClaudeUsage.maxBackoff, max(step, requested)))
             }
             claudeRefreshing = false
             claudeTask = nil

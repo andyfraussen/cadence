@@ -253,9 +253,12 @@ struct ModelTests {
                      "Claude publishes the soonest window to the menu bar")
         precondition(claudeModel.dailyAnchors["claude-five_hour"] != nil && claudeModel.dailyAnchors["claude-seven_day"] != nil,
                      "Every Claude window records a daily baseline")
+        claudeModel.refreshIfDue()
+        precondition(!claudeModel.claudeRefreshing && claudePrompts.count == 1,
+                     "Timer, popover and wake do not re-check Claude within the check interval")
         claudeModel.refreshClaude(allowKeychainPrompt: false)
         await wait { claudePending.count == 1 }
-        claudePending.complete(.failure(UsageError.message("Claude is rate limiting limit checks.")))
+        claudePending.complete(.failure(ClaudeUsage.RateLimited(retryAfter: nil)))
         await wait { !claudeModel.claudeRefreshing }
         precondition(claudePrompts == [true, false] && claudeModel.syncStatus() == .unavailable && claudeModel.hasProblem,
                      "Claude failure is surfaced and automatic refreshes never prompt")

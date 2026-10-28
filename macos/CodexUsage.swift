@@ -122,7 +122,7 @@ enum CodexUsage {
             try? errors.fileHandleForReading.close()
         }
         let requests: [[String: Any]] = [
-            ["method": "initialize", "id": 1, "params": ["clientInfo": ["name": "cadence", "title": "Cadence", "version": "1.4.0"]]],
+            ["method": "initialize", "id": 1, "params": ["clientInfo": ["name": "cadence", "title": "Cadence", "version": "1.4.1"]]],
             ["method": "initialized", "params": [:]],
             ["method": "account/rateLimits/read", "id": 2, "params": [:]]
         ]

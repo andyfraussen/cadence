@@ -1,5 +1,15 @@
 # Changelog
 
+## 1.4.1 — 2026-10-28
+
+### Changed
+
+- Claude limits are checked at most every five minutes, including on popover open and wake; Retry still checks immediately. Claude’s usage endpoint rate-limits aggressively, so a 429 now waits for `Retry-After` or backs off from five minutes up to thirty. Claude readings stay fresh for 15 minutes instead of three.
+
+### Fixed
+
+- An expired copy of Claude Code’s sign-in in `~/.claude/.credentials.json` no longer hides the “press Retry” prompt when the keychain has not been read yet.
+
 ## 1.4.0 — 2026-10-28
 
 ### Added

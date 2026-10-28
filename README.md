@@ -19,7 +19,7 @@
 
 If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a month. Coding intensely during the first two weeks can leave you stranded on throttled speeds for the rest of your cycle.
 
-**Cadence** lives quietly in your macOS menu bar. It detects installed Cursor, ChatGPT/Codex, and Claude Code clients, then checks their available limits every minute. Weekly Codex and Claude limits and Cursor pools get a **fixed daily budget**, with optional **weekday-only pacing**. Codex cards use a purple accent and Claude cards a clay accent.
+**Cadence** lives quietly in your macOS menu bar. It detects installed Cursor, ChatGPT/Codex, and Claude Code clients, then checks their available limits every minute (Claude every five minutes, because its usage endpoint rate-limits aggressively). Weekly Codex and Claude limits and Cursor pools get a **fixed daily budget**, with optional **weekday-only pacing**. Codex cards use a purple accent and Claude cards a clay accent.
 
 <img src="docs/dashboard.png" width="390" alt="Cadence dashboard showing quota pools with safe daily budgets">
 

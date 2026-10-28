@@ -73,6 +73,9 @@ struct Tests {
         check(claude.count == 2 && claude[0].name == "Claude · 5 hours" && claude[1].name == "Claude · Weekly", "Claude shows session then weekly window")
         check(claude[0].remaining == 74.5 && claude[1].remaining == 90, "Claude utilization is a percentage used")
         check(claude[0].windowMinutes == 300 && claude[1].windowMinutes == 10080, "Claude windows keep their durations")
+        check(!claude[0].isStale(at: claudeNow.addingTimeInterval(600)) && claude[0].isStale(at: claudeNow.addingTimeInterval(901)),
+              "Claude readings stay fresh across the 5-minute poll interval")
+        check(monthly[0].isStale(at: now.addingTimeInterval(181)), "Other providers keep the 3-minute stale window")
         check(abs(claude[0].reset.timeIntervalSince(claudeSession)) < 0.001, "Claude fractional-second reset parsed")
         let weeklyOnly = try ClaudeUsage.parse(Data("""
         {"five_hour":null,"seven_day":{"utilization":10,"resets_at":"\(ISO8601DateFormatter().string(from: claudeWeek))"}}

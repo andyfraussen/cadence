@@ -15,19 +15,23 @@ struct Quota: Identifiable {
     /// rate-limit windows). Nil for Cursor/Grok pools, which pace by reset
     /// date.
     let windowMinutes: Double?
+    /// Seconds after `updated` before the reading counts as stale. Providers
+    /// polled less often than once a minute widen it.
+    let staleAfter: TimeInterval
     // Explicit init: a defaulted stored property is excluded from the
     // implicit memberwise initializer on this toolchain, so the default
     // lives here to keep existing construction sites compiling untouched.
-    init(id: String, name: String, used: Double, reset: Date, updated: Date, windowMinutes: Double? = nil) {
+    init(id: String, name: String, used: Double, reset: Date, updated: Date, windowMinutes: Double? = nil, staleAfter: TimeInterval = 180) {
         self.id = id
         self.name = name
         self.used = used
         self.reset = reset
         self.updated = updated
         self.windowMinutes = windowMinutes
+        self.staleAfter = staleAfter
     }
     var remaining: Double { max(0, 100 - used) }
-    func isStale(at now: Date = Date()) -> Bool { reset <= now || now.timeIntervalSince(updated) > 180 }
+    func isStale(at now: Date = Date()) -> Bool { reset <= now || now.timeIntervalSince(updated) > staleAfter }
 
     /// Pacing divisor: sub-day windows always pace against the full window
     /// allowance (1), regardless of which calendar dates the window touches.

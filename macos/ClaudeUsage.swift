@@ -8,6 +8,18 @@ import Security
 /// refresh token and could sign Claude Code out.
 enum ClaudeUsage {
     static let keychainService = "Claude Code-credentials"
+    /// Automatic checks are at least this far apart; the usage endpoint
+    /// rate-limits aggressively and plan limits move slowly.
+    static let checkInterval: TimeInterval = 300
+    static let maxBackoff: TimeInterval = 1800
+    /// Longer than two check intervals plus a backoff step, so a healthy
+    /// reading never flickers to stale between polls.
+    static let staleAfter: TimeInterval = 900
+
+    struct RateLimited: LocalizedError {
+        let retryAfter: TimeInterval?
+        var errorDescription: String? { "Claude is rate limiting limit checks. Cadence will try again later." }
+    }
 
     static func credentialsFile() -> String {
         let environment = ProcessInfo.processInfo.environment
@@ -100,20 +112,23 @@ enum ClaudeUsage {
         let keychain = keychainData(prompt: allowPrompt)
         if case .data(let data) = keychain, let token = consider(data) { return token }
         if let data = FileManager.default.contents(atPath: credentialsFile()), let token = consider(data) { return token }
+        // Claude Code keeps the live token in the keychain and can leave an
+        // outdated copy in the file, so an unread keychain explains the
+        // failure better than an expired file.
+        switch keychain {
+        case .needsPrompt:
+            throw UsageError.message("Press Retry to let Cadence read Claude Code’s sign-in from the keychain.")
+        case .cancelled:
+            throw UsageError.message("Cadence was not allowed to read Claude Code’s sign-in. Press Retry and choose Always Allow.")
+        default: break
+        }
         if sawExpired {
             throw UsageError.message("Claude Code’s sign-in has expired. Use Claude Code once to renew it, then retry.")
         }
         if sawUnusable {
             throw UsageError.message("Claude Code is not signed in with a Claude subscription, so there are no plan limits to show.")
         }
-        switch keychain {
-        case .needsPrompt:
-            throw UsageError.message("Press Retry to let Cadence read Claude Code’s sign-in from the keychain.")
-        case .cancelled:
-            throw UsageError.message("Cadence was not allowed to read Claude Code’s sign-in. Press Retry and choose Always Allow.")
-        default:
-            throw UsageError.message("Sign in to Claude Code (run claude, then /login) and retry.")
-        }
+        throw UsageError.message("Sign in to Claude Code (run claude, then /login) and retry.")
     }
 
     // MARK: Parsing
@@ -142,7 +157,8 @@ enum ClaudeUsage {
                   reset.timeIntervalSince(now) > -60,
                   reset.timeIntervalSince(now) <= window.minutes * 60 + 3600 else { continue }
             quotas.append(Quota(id: "claude-\(window.key)", name: "Claude · \(window.label)", used: used,
-                                reset: reset, updated: now, windowMinutes: window.minutes))
+                                reset: reset, updated: now, windowMinutes: window.minutes,
+                                staleAfter: staleAfter))
         }
         guard !quotas.isEmpty else { throw UsageError.message("Claude has no active usage windows for this account.") }
         return quotas.sorted { $0.reset < $1.reset }
@@ -171,7 +187,7 @@ enum ClaudeUsage {
         switch response.statusCode {
         case 200: return try parse(data)
         case 401, 403: throw UsageError.message("Claude rejected the sign-in. Use Claude Code once to renew it, then retry.")
-        case 429: throw UsageError.message("Claude is rate limiting limit checks. Cadence will try again shortly.")
+        case 429: throw RateLimited(retryAfter: response.value(forHTTPHeaderField: "Retry-After").flatMap(TimeInterval.init))
         default: throw UsageError.message("Claude API error (HTTP \(response.statusCode)). Try refreshing later.")
         }
     }
