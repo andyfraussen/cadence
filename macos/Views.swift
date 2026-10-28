@@ -72,20 +72,35 @@ struct DashboardView: View {
                  if model.showCodex {
                      Divider().padding(.vertical, 2)
                      HStack {
-                         Text("CODEX").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(CodexQuotaCard.purple)
+                         Text("CODEX").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(ProviderQuotaCard.codex)
                          Spacer()
                          if model.codexRefreshing { ProgressView().controlSize(.mini) }
                      }
                      if model.codex.isEmpty { unavailable("Codex", model.codexError) }
                      else {
                          ForEach(model.codex) { quota in
-                             CodexQuotaCard(quota: quota, failure: model.codexError,
-                                            workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[quota.id])
+                             ProviderQuotaCard(accent: ProviderQuotaCard.codex, quota: quota, failure: model.codexError,
+                                               workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[quota.id])
                          }
                      }
                  }
-                 if !model.showCursor && !model.showCodex {
-                     unavailable("No providers enabled", "Cadence checks for installed apps on launch. Enable Cursor or Codex in Settings to monitor its limits.")
+                 if model.showClaude {
+                     Divider().padding(.vertical, 2)
+                     HStack {
+                         Text("CLAUDE").font(.system(size: 10, weight: .bold)).tracking(1.2).foregroundStyle(ProviderQuotaCard.claude)
+                         Spacer()
+                         if model.claudeRefreshing { ProgressView().controlSize(.mini) }
+                     }
+                     if model.claude.isEmpty { unavailable("Claude", model.claudeError) }
+                     else {
+                         ForEach(model.claude) { quota in
+                             ProviderQuotaCard(accent: ProviderQuotaCard.claude, quota: quota, failure: model.claudeError,
+                                               workdaysOnly: model.workdaysOnly, anchor: model.dailyAnchors[quota.id])
+                         }
+                     }
+                 }
+                 if !model.showCursor && !model.showCodex && !model.showClaude {
+                     unavailable("No providers enabled", "Cadence checks for installed apps on launch. Enable Cursor, Codex, or Claude in Settings to monitor its limits.")
                  }
              }
              DisclosureGroup {
@@ -121,8 +136,10 @@ struct DashboardView: View {
     }
 }
 
-struct CodexQuotaCard: View {
-    static let purple = Color(red: 0.48, green: 0.34, blue: 0.82)
+struct ProviderQuotaCard: View {
+    static let codex = Color(red: 0.48, green: 0.34, blue: 0.82)
+    static let claude = Color(red: 0.80, green: 0.42, blue: 0.30)
+    let accent: Color
     let quota: Quota
     let failure: String?
     let workdaysOnly: Bool
@@ -135,27 +152,27 @@ struct CodexQuotaCard: View {
         // (see Quota.pacingDays), so the toggle passes through untouched.
         let daily: DailyBudgetInfo? = stale
             ? nil : quota.dailyInfo(at: now, anchor: anchor, workdaysOnly: workdaysOnly)
-        let dailyAccent: Color = daily?.isOver == true ? .red : daily?.isWarning == true ? .orange : Self.purple
+        let dailyAccent: Color = daily?.isOver == true ? .red : daily?.isWarning == true ? .orange : accent
         VStack(alignment: .leading, spacing: 10) {
             HStack {
-                Circle().fill(stale ? .orange : Self.purple).frame(width: 7, height: 7)
+                Circle().fill(stale ? .orange : accent).frame(width: 7, height: 7)
                 Text(quota.name).font(.system(size: 13, weight: .semibold))
                 Spacer()
                 Text(quota.name.components(separatedBy: " · ").last?.uppercased() ?? "LIMIT")
                     .font(.system(size: 9.5, weight: .bold)).tracking(0.7)
                     .padding(.horizontal, 7).padding(.vertical, 3)
-                    .foregroundStyle(Self.purple)
-                    .background(Self.purple.opacity(0.12), in: Capsule())
+                    .foregroundStyle(accent)
+                    .background(accent.opacity(0.12), in: Capsule())
             }
             HStack(alignment: .firstTextBaseline, spacing: 6) {
                 Text(String(format: "%.1f", quota.remaining))
                     .font(.system(size: 30, weight: .semibold, design: .rounded)).monospacedDigit()
-                    .foregroundStyle(Self.purple)
+                    .foregroundStyle(accent)
                 Text("% left").font(.system(size: 13)).foregroundStyle(.secondary)
                 Spacer()
                 if stale { Label("Stale", systemImage: "exclamationmark.triangle.fill").font(.system(size: 12)).foregroundStyle(.orange) }
             }
-            MeterBar(fraction: quota.remaining / 100, solid: Self.purple,
+            MeterBar(fraction: quota.remaining / 100, solid: accent,
                      label: "\(quota.name) remaining", value: String(format: "%.1f percent", quota.remaining))
             VStack(alignment: .leading, spacing: 7) {
                 HStack {
@@ -185,14 +202,14 @@ struct CodexQuotaCard: View {
                 }
             }
             .padding(.horizontal, 10).padding(.vertical, 8)
-            .background(Self.purple.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
+            .background(accent.opacity(0.09), in: RoundedRectangle(cornerRadius: 10))
             Text("Resets \(quota.reset.formatted(date: .abbreviated, time: .shortened)) · \(quota.resetRemainingText(at: now))")
                 .font(.system(size: 11)).foregroundStyle(.secondary)
             if let failure { Text(failure).font(.system(size: 12)).foregroundStyle(.orange) }
         }
         .padding(14)
-        .background(Self.purple.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
-        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Self.purple.opacity(0.20), lineWidth: 1))
+        .background(accent.opacity(0.07), in: RoundedRectangle(cornerRadius: 14))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(accent.opacity(0.20), lineWidth: 1))
     }
 }
 
@@ -418,7 +435,21 @@ struct SettingsView: View {
                 } header: {
                     Label("Codex", systemImage: "sparkle")
                         .font(.system(size: 11, weight: .semibold))
-                        .foregroundStyle(CodexQuotaCard.purple)
+                        .foregroundStyle(ProviderQuotaCard.codex)
+                }
+
+                Section {
+                    Toggle(isOn: $model.showClaude) {
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text("Show Claude limits")
+                            Text("Reads the plan limits for the account signed in to Claude Code")
+                                .font(.system(size: 11)).foregroundStyle(.secondary)
+                        }
+                    }
+                } header: {
+                    Label("Claude", systemImage: "sparkles")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(ProviderQuotaCard.claude)
                 }
 
                 Section {

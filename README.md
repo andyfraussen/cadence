@@ -2,7 +2,7 @@
 
 <div align="center">
 
-**A lightweight macOS menu bar app that monitors Cursor and Codex limits.**
+**A lightweight macOS menu bar app that monitors Cursor, Codex, and Claude limits.**
 
 [![macOS](https://img.shields.io/badge/macOS-13.0%2B-blue?logo=apple)](https://github.com/andyfraussen/cadence)
 [![Architecture](https://img.shields.io/badge/architecture-Universal%20(Apple%20Silicon%20%2B%20Intel)-brightgreen)](#)
@@ -19,7 +19,7 @@
 
 If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a month. Coding intensely during the first two weeks can leave you stranded on throttled speeds for the rest of your cycle.
 
-**Cadence** lives quietly in your macOS menu bar. It detects installed Cursor and ChatGPT/Codex clients, then checks their available limits every minute. Weekly Codex limits and Cursor pools get a **fixed daily budget**, with optional **weekday-only pacing**. Codex cards use a purple accent.
+**Cadence** lives quietly in your macOS menu bar. It detects installed Cursor, ChatGPT/Codex, and Claude Code clients, then checks their available limits every minute. Weekly Codex and Claude limits and Cursor pools get a **fixed daily budget**, with optional **weekday-only pacing**. Codex cards use a purple accent and Claude cards a clay accent.
 
 <img src="docs/dashboard.png" width="390" alt="Cadence dashboard showing quota pools with safe daily budgets">
 
@@ -30,7 +30,8 @@ If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a mon
 - **Zero Manual Setup (Auto-Sync)**: Reads your active Cursor desktop session from local storage. Current Cursor builds seal that session in the macOS login keychain, so the first refresh asks for this Mac’s login password. Choose Always Allow. No copying tokens or pasting API keys.
 - **Independent Quota Pools**: Tracks **Cursor Models** (Agent, auto), **Other Models** (Claude, GPT), and **Grok Bot** (weekly pool) with separate countdowns.
 - **Codex Limits**: Uses the Codex executable bundled with the ChatGPT desktop app when available, falling back to an installed Codex CLI. It reads the signed-in account through the local Codex app server. The weekly card tracks today's use against a fixed daily budget.
-- **Automatic Provider Detection**: Cursor and Codex appear when their local installs are found. Each has a Settings switch to hide it; your choice is saved. Grok can be switched off separately when Cursor is enabled.
+- **Claude Limits**: Shows the 5-hour session and weekly limits for the account signed in to Claude Code. Cadence reads Claude Code's access token from the login keychain (or `~/.claude/.credentials.json`), so the first refresh asks for this Mac’s login password. Choose Always Allow. Cadence never refreshes or rewrites that token; if it has expired, use Claude Code once to renew it.
+- **Automatic Provider Detection**: Cursor, Codex, and Claude appear when their local installs are found. Each has a Settings switch to hide it; your choice is saved. Grok can be switched off separately when Cursor is enabled.
 - **Smart Pacing Math**:
   - **Fixed Daily Budget**: Sets an allowance on the first successful refresh each local day and keeps it steady as you spend. Savings and overspending feed into the next day’s allowance.
   - **Today’s Progress**: Shows quota used versus today’s budget and how much is still available. The bar turns amber at 80% and red when over budget, with explicit over-budget text.
@@ -39,9 +40,9 @@ If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a mon
 - **Native Menu Bar Presence**:
   - Monochrome Cadence C icon and/or live remaining percentages directly in your menu bar.
   - Choose between: *Logo only*, *Limits only*, or *Both*.
-  - The Codex limit appears as `Cx` when enabled.
+  - The Codex limit appears as `Cx` and the Claude limit as `Cl` when enabled.
 - **100% Private & Secure**:
-  - Cursor requests go directly to Cursor's API (`https://api2.cursor.sh`); Codex requests use the signed-in local Codex CLI.
+  - Cursor requests go directly to Cursor's API (`https://api2.cursor.sh`); Codex requests use the signed-in local Codex CLI; Claude requests go directly to Anthropic's API (`https://api.anthropic.com`).
   - No intermediate servers, no telemetry, no tracking, and no external dependencies.
   - Automatic-only authentication follows Cursor's active desktop session; any legacy manual-mode preferences are removed on launch.
   - Codex authentication stays in Codex. Cadence sends `account/rateLimits/read` over a local app-server process and never reads or stores Codex tokens.
@@ -62,6 +63,7 @@ The default build uses local ad-hoc signing, not Developer ID signing or notariz
 #### Requirements
 - macOS 13.0 or later
 - Xcode Command Line Tools (`xcode-select --install`)
+- For Claude limits: [Claude Code](https://claude.com/claude-code) signed in with a Claude subscription (Pro, Max, Team, or Enterprise).
 - For Codex limits: the ChatGPT desktop app with Codex signed in, or an installed, signed-in [Codex CLI](https://developers.openai.com/codex/cli/). Cadence searches common install locations automatically.
 
 #### Quick Start
@@ -103,7 +105,7 @@ Downloaded ad-hoc builds may be blocked by Gatekeeper. Verify the source and rel
 
 ## How the Pacing Math Works
 
-The daily budget is a visual pacing guide; it does not block usage. It applies to Cursor and weekly Codex limits. Shorter Codex windows show remaining usage and reset time without a daily budget. All displayed spending percentages are shares of your **total provider quota**, not percentages of the daily budget.
+The daily budget is a visual pacing guide; it does not block usage. It applies to Cursor, weekly Codex, and Claude limits. Shorter Codex windows show remaining usage and reset time without a daily budget. All displayed spending percentages are shares of your **total provider quota**, not percentages of the daily budget.
 
 On the first successful refresh each local day, Cadence sets a budget from the starting balance divided by the days remaining until reset. That allowance stays steady for the day under the same pacing setting. Savings or overspending affect the next day’s budget.
 
@@ -129,6 +131,7 @@ Daily baselines survive app restarts. On first use or a new quota cycle, trackin
 2. **Network**: Ephemeral `URLSession` requests target `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` and `GetSandUsageStatus`. Daily pacing baselines and last observed usage are saved locally in UserDefaults so budgets survive restarts. Hidden Grok does not refresh; visible pools publish independently.
 3. **Legacy tokens**: Manual-token authentication is no longer supported. Old Cadence Keychain entries are neither read nor deleted; you may remove the `dev.fraussen.cadence` / `cursor-session` entry yourself in Keychain Access.
 4. **Codex**: The optional Codex section starts the local `codex app-server --stdio` process and calls the [documented limits method](https://learn.chatgpt.com/docs/app-server). It prefers the executable bundled with ChatGPT and can use an installed CLI as a fallback. The bundled executable location may change with ChatGPT updates. No Codex credential is copied into Cadence. Only the core `codex` bucket is shown; other account or model-specific buckets are not combined into it.
+5. **Claude**: The optional Claude section calls `GET https://api.anthropic.com/api/oauth/usage` with Claude Code's OAuth access token, read from the `Claude Code-credentials` keychain item or `~/.claude/.credentials.json` (`CLAUDE_CONFIG_DIR` is honored). This endpoint is what Claude Code itself uses for `/usage`, but it is undocumented and may change. The token is held in memory for the request only; Cadence does not refresh, copy, or store it. Only the 5-hour and weekly all-model windows are shown.
 
 ---
 

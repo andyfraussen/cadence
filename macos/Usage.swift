@@ -325,7 +325,7 @@ import CoreFoundation
 /// Rejects HTTP redirects so the `Authorization: Bearer` token is never
 /// forwarded to another origin. The Cursor API is not expected to redirect;
 /// a 3xx surfaces as an API error instead.
-private final class CursorAPIRedirectGuard: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
+final class CursorAPIRedirectGuard: NSObject, URLSessionDelegate, URLSessionTaskDelegate {
     func urlSession(_ session: URLSession, task: URLSessionTask,
                     willPerformHTTPRedirection response: HTTPURLResponse,
                     newRequest request: URLRequest,

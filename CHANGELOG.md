@@ -1,5 +1,11 @@
 # Changelog
 
+## 1.4.0 — 2026-10-28
+
+### Added
+
+- Claude limits: the 5-hour session and weekly windows for the account signed in to Claude Code, with the same fixed daily budget and menu bar `Cl` readout as the other providers. Cadence reads Claude Code’s token from the login keychain (choose **Always Allow**) and never refreshes or stores it.
+
 ## 1.3.5 — 2026-10-23
 
 ### Fixed

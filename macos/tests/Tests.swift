@@ -59,6 +59,39 @@ struct Tests {
         check(both[0].windowMinutes == 300 && both[1].windowMinutes == 10080, "Each Codex window keeps its own duration")
         do { _ = try CodexUsage.parse(Data("{\"id\":2,\"result\":{}}".utf8), at: now); preconditionFailure("Missing Codex limit was accepted") }
         catch { assertions += 1 }
+        let claudeNow = Date(timeIntervalSince1970: 1_790_000_000)
+        let claudeSession = Date(timeIntervalSince1970: 1_790_000_000 + 3 * 3600)
+        let claudeWeek = Date(timeIntervalSince1970: 1_790_000_000 + 5 * 86400)
+        let claudeISO = ISO8601DateFormatter()
+        claudeISO.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        let claudeJSON = Data("""
+        {"five_hour":{"utilization":25.5,"resets_at":"\(claudeISO.string(from: claudeSession))"},
+         "seven_day":{"utilization":10,"resets_at":"\(ISO8601DateFormatter().string(from: claudeWeek))"},
+         "seven_day_opus":null,"extra_usage":{"is_enabled":false}}
+        """.utf8)
+        let claude = try ClaudeUsage.parse(claudeJSON, at: claudeNow)
+        check(claude.count == 2 && claude[0].name == "Claude · 5 hours" && claude[1].name == "Claude · Weekly", "Claude shows session then weekly window")
+        check(claude[0].remaining == 74.5 && claude[1].remaining == 90, "Claude utilization is a percentage used")
+        check(claude[0].windowMinutes == 300 && claude[1].windowMinutes == 10080, "Claude windows keep their durations")
+        check(abs(claude[0].reset.timeIntervalSince(claudeSession)) < 0.001, "Claude fractional-second reset parsed")
+        let weeklyOnly = try ClaudeUsage.parse(Data("""
+        {"five_hour":null,"seven_day":{"utilization":10,"resets_at":"\(ISO8601DateFormatter().string(from: claudeWeek))"}}
+        """.utf8), at: claudeNow)
+        check(weeklyOnly.count == 1 && weeklyOnly[0].id == "claude-seven_day", "Inactive Claude window is skipped")
+        for bad in [#"{"five_hour":null,"seven_day":null}"#, #"{"five_hour":{"utilization":true,"resets_at":"2026-10-28T17:39:59Z"}}"#,
+                    #"{"five_hour":{"utilization":150,"resets_at":"2026-10-28T17:39:59Z"}}"#, #"{"five_hour":{"utilization":5,"resets_at":"2099-01-01T00:00:00Z"}}"#,
+                    "[]"] {
+            do { _ = try ClaudeUsage.parse(Data(bad.utf8), at: claudeNow); preconditionFailure("Bad Claude response accepted: \(bad)") }
+            catch { assertions += 1 }
+        }
+        func credential(_ json: String) -> ClaudeUsage.Credential { ClaudeUsage.credential(from: Data(json.utf8), at: claudeNow) }
+        let expiresLater = Int(claudeNow.timeIntervalSince1970 * 1000) + 3_600_000
+        let expiredAlready = Int(claudeNow.timeIntervalSince1970 * 1000) - 1000
+        check(credential(#"{"claudeAiOauth":{"accessToken":"t","expiresAt":\#(expiresLater)}}"#) == .token("t"), "Valid Claude Code token accepted")
+        check(credential(#"{"claudeAiOauth":{"accessToken":"t","expiresAt":\#(expiredAlready)}}"#) == .expired, "Expired Claude Code token is not sent")
+        check(credential(#"{"claudeAiOauth":{"accessToken":"t"}}"#) == .token("t"), "Token without expiry is tried")
+        check(credential(#"{"mcpOAuth":{}}"#) == .unusable && credential("not json") == .unusable && credential(#"{"claudeAiOauth":{"accessToken":""}}"#) == .unusable,
+              "Credentials without a Claude subscription token are unusable")
         let zero = try UsageParser.monthly(Data("""
         {"billingCycleEnd":1791114713000,"planUsage":{"autoPercentUsed":0,"apiPercentUsed":125}}
         """.utf8))

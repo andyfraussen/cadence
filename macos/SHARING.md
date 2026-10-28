@@ -1,12 +1,12 @@
-# Cadence 1.3.5
+# Cadence 1.4.0
 
-A small, independent macOS menu bar app for Cursor Models, Other Models, and Grok Bot usage. Requires macOS 13 or later. The universal build includes Apple Silicon and Intel binaries.
+A small, independent macOS menu bar app for Cursor Models, Other Models, Grok Bot, Codex, and Claude usage. Requires macOS 13 or later. The universal build includes Apple Silicon and Intel binaries.
 
 ## Start
 
 1. Unzip the download and drag Cadence.app into Applications.
 2. Open the app. Click its Cadence C icon or usage percentages in the menu bar.
-3. Sign in to the Cursor desktop app.
+3. Sign in to the Cursor desktop app, and optionally to Codex (ChatGPT app or CLI) and Claude Code.
 4. When macOS asks Cadence to use the “Cursor Safe Storage” keychain item, enter the password for this Mac and choose **Always Allow**. That is the Mac login password, not your Google password. Later refreshes stay quiet unless you press **Retry**.
 5. Open Settings to choose logo only, limits only, or both; show/hide Grok Bot; use weekday pacing; and enable Launch at Login.
 

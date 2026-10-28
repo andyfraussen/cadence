@@ -21,6 +21,7 @@ struct ModelTests {
         defer { defaults.removePersistentDomain(forName: suite) }
         defaults.set(false, forKey: "showGrok")
         defaults.set(false, forKey: "showCodex")
+        defaults.set(false, forKey: "showClaude")
         defaults.set(true, forKey: "showCursor")
         defaults.set("manual", forKey: "authMode")
         defaults.set("manual", forKey: "authSource")
@@ -177,6 +178,7 @@ struct ModelTests {
         let codexDefaults = UserDefaults(suiteName: codexSuite)!
         defer { codexDefaults.removePersistentDomain(forName: codexSuite) }
         codexDefaults.set(true, forKey: "showCodex")
+        codexDefaults.set(false, forKey: "showClaude")
         codexDefaults.set(false, forKey: "showCursor")
         let codexPending = Pending<[Quota]>()
         let codexModel = AppModel(defaults: codexDefaults, tokenLoader: { preconditionFailure("Disabled Cursor must not authenticate") },
@@ -224,6 +226,48 @@ struct ModelTests {
                      "Codex baseline and disabled Cursor survive restart")
         codexModel.showCodex = false
         precondition(codexModel.codex.isEmpty && !codexModel.toolbarTitle.contains("Cx"), "Hiding Codex clears its display")
+
+        // Claude: independent provider, no Cursor token, and automatic
+        // refreshes back off after a failure while Retry bypasses it.
+        let claudeSuite = "dev.fraussen.cadence.claude.\(UUID().uuidString)"
+        let claudeDefaults = UserDefaults(suiteName: claudeSuite)!
+        defer { claudeDefaults.removePersistentDomain(forName: claudeSuite) }
+        claudeDefaults.set(true, forKey: "showClaude")
+        claudeDefaults.set(false, forKey: "showCursor")
+        claudeDefaults.set(false, forKey: "showCodex")
+        let claudePending = Pending<[Quota]>()
+        var claudePrompts: [Bool] = []
+        let claudeModel = AppModel(defaults: claudeDefaults, tokenLoader: { preconditionFailure("Disabled Cursor must not authenticate") },
+                                   claudeLoader: { prompt in claudePrompts.append(prompt); return try await claudePending.load() })
+        claudeModel.refresh()
+        await wait { claudePending.count == 1 }
+        precondition(claudeModel.claudeRefreshing && claudePrompts == [true], "Claude refresh is independent and may prompt on manual refresh")
+        let claudeNow = Date()
+        let session = Quota(id: "claude-five_hour", name: "Claude · 5 hours", used: 25,
+                            reset: claudeNow.addingTimeInterval(3 * 3600), updated: claudeNow, windowMinutes: 300)
+        let weekly = Quota(id: "claude-seven_day", name: "Claude · Weekly", used: 10,
+                           reset: claudeNow.addingTimeInterval(5 * 86400), updated: claudeNow, windowMinutes: 10080)
+        claudePending.complete(.success([session, weekly]))
+        await wait { !claudeModel.claudeRefreshing }
+        precondition(claudeModel.toolbarTitle.contains("Cl 75%") && claudeModel.syncStatus() == .connected,
+                     "Claude publishes the soonest window to the menu bar")
+        precondition(claudeModel.dailyAnchors["claude-five_hour"] != nil && claudeModel.dailyAnchors["claude-seven_day"] != nil,
+                     "Every Claude window records a daily baseline")
+        claudeModel.refreshClaude(allowKeychainPrompt: false)
+        await wait { claudePending.count == 1 }
+        claudePending.complete(.failure(UsageError.message("Claude is rate limiting limit checks.")))
+        await wait { !claudeModel.claudeRefreshing }
+        precondition(claudePrompts == [true, false] && claudeModel.syncStatus() == .unavailable && claudeModel.hasProblem,
+                     "Claude failure is surfaced and automatic refreshes never prompt")
+        claudeModel.refreshIfDue()
+        precondition(!claudeModel.claudeRefreshing && claudePrompts.count == 2, "Automatic refresh waits out Claude backoff")
+        claudeModel.refresh()
+        await wait { claudePending.count == 1 }
+        claudePending.complete(.success([session]))
+        await wait { !claudeModel.claudeRefreshing }
+        precondition(claudeModel.claudeError == nil && claudeModel.claude.count == 1, "Manual refresh bypasses backoff and clears the error")
+        claudeModel.showClaude = false
+        precondition(claudeModel.claude.isEmpty && !claudeModel.toolbarTitle.contains("Cl"), "Hiding Claude clears its display")
         print("Passed model regression checks.")
     }
 

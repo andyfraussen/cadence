@@ -9,14 +9,17 @@ final class AppModel: ObservableObject {
     @Published var monthly: [Quota] = []
     @Published var grok: Quota?
     @Published var codex: [Quota] = []
+    @Published var claude: [Quota] = []
     @Published var monthlyError: String?
     @Published var grokError: String?
     @Published var codexError: String?
+    @Published var claudeError: String?
     @Published private(set) var monthlyRefreshing = false
     @Published private(set) var grokRefreshing = false
     @Published private(set) var codexRefreshing = false
+    @Published private(set) var claudeRefreshing = false
     @Published private(set) var tokenLoading = false
-    var refreshing: Bool { monthlyRefreshing || grokRefreshing || codexRefreshing || tokenLoading }
+    var refreshing: Bool { monthlyRefreshing || grokRefreshing || codexRefreshing || claudeRefreshing || tokenLoading }
     @Published var displayMode: DisplayMode { didSet { defaults.set(displayMode.rawValue, forKey: "displayMode"); onDisplayChange?() } }
     @Published var showCursor: Bool {
         didSet {
@@ -49,7 +52,20 @@ final class AppModel: ObservableObject {
             onDisplayChange?()
         }
     }
-    /// Morning baselines per quota id (`C`, `O`, `G`, Codex windows). Persisted so the daily
+    @Published var showClaude: Bool {
+        didSet {
+            defaults.set(showClaude, forKey: "showClaude")
+            if showClaude { refreshClaude() }
+            else {
+                claudeGeneration += 1
+                claudeTask?.cancel(); claudeTask = nil
+                claudeRefreshing = false; claude = []; claudeError = nil
+                claudeFailures = 0; claudeBackoffUntil = nil
+            }
+            onDisplayChange?()
+        }
+    }
+    /// Morning baselines per quota id (`C`, `O`, `G`, Codex and Claude windows). Persisted so the daily
     /// budget survives restarts and stays fixed until the next morning.
     @Published var dailyAnchors: [String: DailyAnchor] = [:]
     var onDisplayChange: (() -> Void)?
@@ -61,6 +77,10 @@ final class AppModel: ObservableObject {
     private var tokenTask: Task<Void, Never>?
     private var codexTask: Task<Void, Never>?
     private var codexGeneration = 0
+    private var claudeTask: Task<Void, Never>?
+    private var claudeGeneration = 0
+    private var claudeFailures = 0
+    private var claudeBackoffUntil: Date?
     private var lastToken: String?
     private var consecutiveFailures = 0
     private var backoffUntil: Date?
@@ -69,18 +89,21 @@ final class AppModel: ObservableObject {
     private let monthlyLoader: (String) async throws -> [Quota]
     private let grokLoader: (String) async throws -> Quota
     private let codexLoader: () async throws -> [Quota]
+    private let claudeLoader: (Bool) async throws -> [Quota]
 
     init(demo: Bool = false, defaults: UserDefaults? = nil,
          tokenLoader: @escaping () async throws -> String = { try await Authentication.automaticToken() },
          monthlyLoader: @escaping (String) async throws -> [Quota] = { try UsageParser.monthly(await CursorAPI.fetch("GetCurrentPeriodUsage", token: $0)) },
          grokLoader: @escaping (String) async throws -> Quota = { try UsageParser.grok(await CursorAPI.fetch("GetSandUsageStatus", token: $0)) },
-         codexLoader: @escaping () async throws -> [Quota] = { try await CodexUsage.fetch() }) {
+         codexLoader: @escaping () async throws -> [Quota] = { try await CodexUsage.fetch() },
+         claudeLoader: @escaping (Bool) async throws -> [Quota] = { try await ClaudeUsage.fetch(allowPrompt: $0) }) {
         self.demo = demo
         self.defaults = defaults ?? (demo ? UserDefaults(suiteName: "dev.fraussen.cadence.preview")! : .standard)
         self.tokenLoader = tokenLoader
         self.monthlyLoader = monthlyLoader
         self.grokLoader = grokLoader
         self.codexLoader = codexLoader
+        self.claudeLoader = claudeLoader
         let defaults = self.defaults
         defaults.removeObject(forKey: "authMode")
         defaults.removeObject(forKey: "authSource")
@@ -90,6 +113,8 @@ final class AppModel: ObservableObject {
         workdaysOnly = defaults.bool(forKey: "workdaysOnly")
         showCodex = defaults.object(forKey: "showCodex") as? Bool ??
             (demo || CodexUsage.executable() != nil)
+        showClaude = defaults.object(forKey: "showClaude") as? Bool ??
+            (demo || ClaudeUsage.isInstalled())
         dailyAnchors = Self.loadDailyAnchors(from: defaults)
         if demo {
             let now = Date()
@@ -97,7 +122,9 @@ final class AppModel: ObservableObject {
                         Quota(id: "O", name: "Other Models", used: 14, reset: now.addingTimeInterval(25 * 86400), updated: now)]
             grok = Quota(id: "G", name: "Grok Bot", used: 2.3, reset: now.addingTimeInterval(7 * 86400), updated: now)
             codex = [Quota(id: "codex-primary", name: "Codex · Weekly", used: 33, reset: now.addingTimeInterval(4 * 86400), updated: now)]
-            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex, at: now)
+            claude = [Quota(id: "claude-five_hour", name: "Claude · 5 hours", used: 18, reset: now.addingTimeInterval(3 * 3600), updated: now, windowMinutes: 300),
+                      Quota(id: "claude-seven_day", name: "Claude · Weekly", used: 41, reset: now.addingTimeInterval(5 * 86400), updated: now, windowMinutes: 10080)]
+            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex + claude, at: now)
         }
     }
 
@@ -176,11 +203,12 @@ final class AppModel: ObservableObject {
     /// `allowKeychainPrompt: false` so a dismissed dialog stays dismissed.
     func refresh(allowKeychainPrompt: Bool = true) {
         guard !demo else {
-            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex)
+            recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex + claude)
             onDisplayChange?()
             return
         }
         refreshCodex()
+        refreshClaude(allowKeychainPrompt: allowKeychainPrompt, respectBackoff: !allowKeychainPrompt)
         guard showCursor else { onDisplayChange?(); return }
         // Debounce concurrent token loads; fetch tasks debounce individually below.
         guard tokenTask == nil else { onDisplayChange?(); return }
@@ -236,12 +264,43 @@ final class AppModel: ObservableObject {
         }
     }
 
+    /// `respectBackoff` is set by automatic refreshes so a rate-limited or
+    /// signed-out Claude is not polled every minute; Retry bypasses it.
+    func refreshClaude(allowKeychainPrompt: Bool = true, respectBackoff: Bool = false) {
+        guard showClaude, !demo, claudeTask == nil else { return }
+        if respectBackoff, let until = claudeBackoffUntil, Date() < until { return }
+        claudeRefreshing = true
+        claudeGeneration += 1
+        let request = claudeGeneration
+        claudeTask = Task {
+            let result: Result<[Quota], Error>
+            do { result = .success(try await claudeLoader(allowKeychainPrompt)) }
+            catch { result = .failure(error) }
+            guard claudeGeneration == request, showClaude else { return }
+            switch result {
+            case .success(let quotas):
+                claude = quotas; claudeError = nil
+                claudeFailures = 0; claudeBackoffUntil = nil
+                recordDailySnapshots(for: quotas)
+            case .failure(let error):
+                claudeError = error.localizedDescription
+                claudeFailures += 1
+                let delay = min(900.0, 60.0 * pow(2.0, Double(max(0, claudeFailures - 1))))
+                claudeBackoffUntil = Date().addingTimeInterval(delay)
+            }
+            claudeRefreshing = false
+            claudeTask = nil
+            onDisplayChange?()
+        }
+    }
+
     /// Automatic refresh for the 60s timer. Skips while in exponential backoff
     /// so an offline or failing backend does not hammer the API. Does not
     /// raise the Mac keychain dialog; Retry does that.
     func refreshIfDue(at now: Date = Date()) {
         if showCursor, let until = backoffUntil, now < until {
             refreshCodex()
+            refreshClaude(allowKeychainPrompt: false, respectBackoff: true)
             updateMenuBarOnly()
             return
         }
@@ -341,17 +400,18 @@ final class AppModel: ObservableObject {
     func syncStatus(at now: Date = Date()) -> SyncStatus {
         if demo { return .demo }
         if refreshing { return .fetching }
-        if (showCursor && (monthlyError != nil || (showGrok && grokError != nil))) || (showCodex && codexError != nil) { return .unavailable }
+        if (showCursor && (monthlyError != nil || (showGrok && grokError != nil))) || (showCodex && codexError != nil) || (showClaude && claudeError != nil) { return .unavailable }
         if (showCursor && (monthly.contains(where: { $0.isStale(at: now) }) || (showGrok && grok?.isStale(at: now) == true))) ||
-            (showCodex && codex.contains(where: { $0.isStale(at: now) })) { return .stale }
-        if (showCursor && (monthly.isEmpty || (showGrok && grok == nil))) || (showCodex && codex.isEmpty) { return .idle }
-        if !showCursor && !showCodex { return .idle }
+            (showCodex && codex.contains(where: { $0.isStale(at: now) })) ||
+            (showClaude && claude.contains(where: { $0.isStale(at: now) })) { return .stale }
+        if (showCursor && (monthly.isEmpty || (showGrok && grok == nil))) || (showCodex && codex.isEmpty) || (showClaude && claude.isEmpty) { return .idle }
+        if !showCursor && !showCodex && !showClaude { return .idle }
         return .connected
     }
 
     var lastSuccess: Date? {
         ((showCursor ? monthly.map(\.updated) : []) + (showCursor && showGrok ? [grok?.updated].compactMap { $0 } : []) +
-         (showCodex ? codex.map(\.updated) : [])).max()
+         (showCodex ? codex.map(\.updated) : []) + (showClaude ? claude.map(\.updated) : [])).max()
     }
 
     var toolbarTitle: String {
@@ -360,11 +420,13 @@ final class AppModel: ObservableObject {
         } : []
         if showCursor && showGrok { pieces.append(grok.map { String(format: "G %.0f%%", $0.remaining) } ?? "G —") }
         if showCodex { pieces.append(codex.first.map { String(format: "Cx %.0f%%", $0.remaining) } ?? "Cx —") }
+        if showClaude { pieces.append(claude.first.map { String(format: "Cl %.0f%%", $0.remaining) } ?? "Cl —") }
         return (pieces.isEmpty ? "Cadence" : pieces.joined(separator: " · ")) + (hasProblem ? " !" : "")
     }
     var hasProblem: Bool {
         (showCursor && (monthlyError != nil || monthly.contains(where: { $0.isStale() }) ||
                         (showGrok && (grokError != nil || grok?.isStale() == true)))) ||
-        (showCodex && (codexError != nil || codex.contains(where: { $0.isStale() })))
+        (showCodex && (codexError != nil || codex.contains(where: { $0.isStale() }))) ||
+        (showClaude && (claudeError != nil || claude.contains(where: { $0.isStale() })))
     }
 }
