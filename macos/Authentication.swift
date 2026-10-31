@@ -1,26 +1,9 @@
 import CommonCrypto
 import Foundation
-import LocalAuthentication
 import Security
 import SQLite3
 
 enum Authentication {
-    /// Set by manual refresh. The 60s timer leaves this false so a dismissed
-    /// keychain dialog is not shown again until the user presses Retry.
-    private final class PromptGate: @unchecked Sendable {
-        private let lock = NSLock()
-        private var allowed = true
-        var promptsAllowed: Bool {
-            get { lock.lock(); defer { lock.unlock() }; return allowed }
-            set { lock.lock(); allowed = newValue; lock.unlock() }
-        }
-    }
-    private static let prompts = PromptGate()
-    static var promptsAllowed: Bool {
-        get { prompts.promptsAllowed }
-        set { prompts.promptsAllowed = newValue }
-    }
-
     static func isCursorInstalled() -> Bool {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         let appPaths = ["/Applications/Cursor.app", home + "/Applications/Cursor.app",
@@ -44,9 +27,8 @@ enum Authentication {
 
     /// Async entry point for the app. Runs blocking SQLite I/O off the main
     /// actor so a locked Cursor database cannot freeze the menu bar.
-    /// Keychain UI, when needed, is presented from the main thread.
-    static func automaticToken() async throws -> String {
-        let allowPrompt = promptsAllowed
+    /// Keychain reads are serialized and respect this request's prompt policy.
+    static func automaticToken(allowPrompt: Bool = false) async throws -> String {
         let paths = candidatePaths()
         return try await Task.detached(priority: .utility) {
             var lastError: Error = UsageError.message("Open the Cursor desktop app and sign in, then retry.")
@@ -68,7 +50,7 @@ enum Authentication {
     /// Synchronous reader for a single database file. Exposed for tests with
     /// temporary SQLite fixtures. `password` injects the keychain secret so
     /// tests never touch the login keychain.
-    static func readToken(at path: String, allowPrompt: Bool = true, password: Data? = nil) throws -> String {
+    static func readToken(at path: String, allowPrompt: Bool = false, password: Data? = nil) throws -> String {
         // Prefer a direct read-only open; fall back to a temp copy when the
         // live database is locked or WAL recovery needs write access.
         let raw: String
@@ -140,7 +122,7 @@ enum Authentication {
 /// 1003 rounds, 16 bytes). The dialog asks for this Mac's login password.
 enum CursorSessionSeal {
     static let envelope = "cursor-safe-storage:v1:"
-    static let macPasswordHelp = "Enter the password for this Mac when asked. Google sign-in does not unlock this prompt. Press Retry, use your Mac login password, and choose Always Allow."
+    static let macPasswordHelp = "Click Refresh or Settings → Retry to unlock Cursor’s saved sign-in. When macOS asks, use this Mac’s login password and choose Always Allow. Background checks will not ask."
 
     private static let salt = Data("saltysalt".utf8)
     private static let iv = Data(repeating: 0x20, count: 16)
@@ -261,25 +243,15 @@ enum CursorSessionSeal {
     }
 
     private static func lookup(service: String, account: String, prompt: Bool) -> KeychainResult {
-        if Thread.isMainThread { return lookupOnThisThread(service: service, account: account, prompt: prompt) }
-        return DispatchQueue.main.sync { lookupOnThisThread(service: service, account: account, prompt: prompt) }
-    }
-
-    private static func lookupOnThisThread(service: String, account: String, prompt: Bool) -> KeychainResult {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: service,
             kSecAttrAccount as String: account,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        if !prompt {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
         var item: CFTypeRef?
-        let status = SecItemCopyMatching(query as CFDictionary, &item)
+        let status = KeychainReader.copyMatching(query, allowPrompt: prompt, result: &item)
         switch status {
         case errSecSuccess:
             guard let data = item as? Data, !data.isEmpty else { return .missing }

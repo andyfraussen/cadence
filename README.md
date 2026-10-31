@@ -27,10 +27,10 @@ If you use **Cursor Pro** or **Pro+**, your fast model requests reset once a mon
 
 ## Features
 
-- **Zero Manual Setup (Auto-Sync)**: Reads your active Cursor desktop session from local storage. Current Cursor builds seal that session in the macOS login keychain, so the first refresh asks for this Mac’s login password. Choose Always Allow. No copying tokens or pasting API keys.
+- **Automatic Session Sync**: Reads your active Cursor desktop session from local storage. If Keychain access needs approval, click **Refresh** or **Settings → Retry** and choose **Always Allow** in the macOS dialog. Launch and background checks stay quiet. No copying tokens or pasting API keys.
 - **Independent Quota Pools**: Tracks **Cursor Models** (Agent, auto), **Other Models** (Claude, GPT), and **Grok Bot** (weekly pool) with separate countdowns.
 - **Codex Limits**: Uses the Codex executable bundled with the ChatGPT desktop app when available, falling back to an installed Codex CLI. It reads the signed-in account through the local Codex app server. The weekly card tracks today's use against a fixed daily budget.
-- **Claude Limits**: Shows the 5-hour session and weekly limits for the account signed in to Claude Code. Cadence reads Claude Code's access token from the login keychain (or `~/.claude/.credentials.json`), so the first refresh asks for this Mac’s login password. Choose Always Allow. Cadence never refreshes or rewrites that token; if it has expired, use Claude Code once to renew it.
+- **Claude Limits**: Shows the 5-hour session and weekly limits for the account signed in to Claude Code. Cadence reads Claude Code's access token from the login keychain (or `~/.claude/.credentials.json`); use **Refresh** or **Settings → Retry** if access needs approval. Cadence never refreshes or rewrites that token; if it has expired, use Claude Code once to renew it.
 - **Automatic Provider Detection**: Cursor, Codex, and Claude appear when their local installs are found. Each has a Settings switch to hide it; your choice is saved. Grok can be switched off separately when Cursor is enabled.
 - **Smart Pacing Math**:
   - **Fixed Daily Budget**: Sets an allowance on the first successful refresh each local day and keeps it steady as you spend. Savings and overspending feed into the next day’s allowance.
@@ -83,7 +83,7 @@ cp -R dist/Cadence.app /Applications/
 open /Applications/Cadence.app
 ```
 
-On first launch, sign in to the Cursor desktop app. macOS then asks Cadence for the **login** keychain password. Enter the password for this Mac and choose **Always Allow**. That prompt is not your Google password. Later refreshes stay quiet; **Retry** asks again if you dismissed it.
+Sign in to the Cursor desktop app. Cadence checks quietly on launch and in the background. If access needs approval, click the dashboard **Refresh** button or **Settings → Retry**. When macOS asks to read “Cursor Safe Storage” or “Claude Code-credentials”, enter this Mac's login password and choose **Always Allow**. That is not your Google password. A local rebuild can require approval again because ad-hoc signing does not preserve the app's identity across different binaries.
 
 Release notes are in [CHANGELOG.md](CHANGELOG.md).
 
@@ -127,7 +127,7 @@ Daily baselines survive app restarts. On first use or a new quota cycle, trackin
 
 ## Security & Privacy
 
-1. **Authentication**: Cursor stores your session in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. The app opens this database with `SQLITE_OPEN_READONLY` and never writes to it. When the session is sealed (`cursor-safe-storage:v1:`), Cadence decrypts it with the `Cursor Safe Storage` login-keychain item. macOS asks for this Mac’s login password once; that password is not the Google account password. The key stays in memory for the rest of the launch and is never written to disk.
+1. **Authentication**: Cursor stores your session in `~/Library/Application Support/Cursor/User/globalStorage/state.vscdb`. The app opens this database with `SQLITE_OPEN_READONLY` and never writes to it. When the session is sealed (`cursor-safe-storage:v1:`), Cadence decrypts it with the `Cursor Safe Storage` login-keychain item. Only an explicit **Refresh** or **Retry** permits a password dialog; launch and background checks report that access needs approval instead. The storage key stays in memory for the rest of the launch and is never written to disk. Cadence does not receive your Mac login password.
 2. **Network**: Ephemeral `URLSession` requests target `https://api2.cursor.sh/aiserver.v1.DashboardService/GetCurrentPeriodUsage` and `GetSandUsageStatus`. Daily pacing baselines and last observed usage are saved locally in UserDefaults so budgets survive restarts. Hidden Grok does not refresh; visible pools publish independently.
 3. **Legacy tokens**: Manual-token authentication is no longer supported. Old Cadence Keychain entries are neither read nor deleted; you may remove the `dev.fraussen.cadence` / `cursor-session` entry yourself in Keychain Access.
 4. **Codex**: The optional Codex section starts the local `codex app-server --stdio` process and calls the [documented limits method](https://learn.chatgpt.com/docs/app-server). It prefers the executable bundled with ChatGPT and can use an installed CLI as a fallback. The bundled executable location may change with ChatGPT updates. No Codex credential is copied into Cadence. Only the core `codex` bucket is shown; other account or model-specific buckets are not combined into it.

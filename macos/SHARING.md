@@ -1,4 +1,4 @@
-# Cadence 1.4.1
+# Cadence 1.4.2
 
 A small, independent macOS menu bar app for Cursor Models, Other Models, Grok Bot, Codex, and Claude usage. Requires macOS 13 or later. The universal build includes Apple Silicon and Intel binaries.
 
@@ -7,14 +7,16 @@ A small, independent macOS menu bar app for Cursor Models, Other Models, Grok Bo
 1. Unzip the download and drag Cadence.app into Applications.
 2. Open the app. Click its Cadence C icon or usage percentages in the menu bar.
 3. Sign in to the Cursor desktop app, and optionally to Codex (ChatGPT app or CLI) and Claude Code.
-4. When macOS asks Cadence to use the “Cursor Safe Storage” keychain item, enter the password for this Mac and choose **Always Allow**. That is the Mac login password, not your Google password. Later refreshes stay quiet unless you press **Retry**.
+4. Cadence checks quietly on launch. If access needs approval, click **Refresh** in the dashboard or **Settings → Retry**. When macOS asks to use “Cursor Safe Storage” or “Claude Code-credentials”, enter this Mac's login password and choose **Always Allow**. That is not your Google password. Background checks never request a password.
 5. Open Settings to choose logo only, limits only, or both; show/hide Grok Bot; use weekday pacing; and enable Launch at Login.
 
 No Node, npm, Python, web server, or project folder is needed to run the built app.
 
 ## Automatic Session Sync
 
-Cadence reads your active Cursor desktop session from local storage (`state.vscdb`) each time usage refreshes. Current Cursor builds seal that session in the macOS login keychain, so the first successful refresh asks for this Mac’s login password. Choose **Always Allow**. No manual token entry, copying/pasting, or configuration is required. Stay signed in to the Cursor desktop app on your Mac.
+Cadence reads your active Cursor desktop session from local storage (`state.vscdb`) each time usage refreshes. Current Cursor builds seal that session with a storage key in the macOS login Keychain. If access is not yet approved, Cadence explains how to authorize it without opening a password dialog in the background. Click **Refresh** or **Settings → Retry**, then choose **Always Allow** in the macOS dialog. No manual token entry or copying/pasting is required. Stay signed in to the Cursor desktop app on your Mac.
+
+Ad-hoc builds identify each changed binary separately, so rebuilding or replacing the app can invalidate a previous **Always Allow** approval. A stable signing identity can improve continuity across updates; provider changes to their Keychain items can still require a new approval. Cadence never receives your Mac login password or weakens a provider's access controls.
 
 ## Read the numbers
 
@@ -34,7 +36,7 @@ The app reads Cursor's local database in read-only mode and authenticates reques
 
 This build is ad-hoc signed. When downloaded over the internet, macOS Gatekeeper may block execution or show a security warning because it is not signed with a paid Apple Developer ID certificate or notarized by Apple.
 
-- **Before opening a downloaded build**: Verify its source and compare its checksum with a trusted release. From the folder containing the ZIP and checksum, run `shasum -a 256 -c Cadence-1.4.1-universal.zip.sha256`. A checksum detects corruption, not publisher identity.
+- **Before opening a downloaded build**: Verify its source and compare its checksum with a trusted release. From the folder containing the ZIP and checksum, run `shasum -a 256 -c Cadence-1.4.2-universal.zip.sha256`. A checksum detects corruption, not publisher identity.
 - **For a build you trust**: Use System Settings → Privacy & Security → **Open Anyway**, if available for your macOS version and policy. Do not disable Gatekeeper or remove unrelated extended attributes.
 - **Building from source**: Review the code and run `npm run build:mac` or `bash macos/build.sh`. This generally avoids download quarantine, but local signing does not guarantee trust or suppress every security warning.
 - **For official notarized releases**: The maintainer must sign with an Apple Developer ID Application certificate and notarize via `xcrun notarytool` as detailed below.

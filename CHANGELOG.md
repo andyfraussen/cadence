@@ -1,5 +1,13 @@
 # Changelog
 
+## 1.4.2 — 2026-10-31
+
+### Fixed
+
+- Background Cursor and Claude checks now suppress password dialogs for the file-based login Keychain as well as the data-protection Keychain. The previous `LAContext` setting alone did not cover these legacy items.
+- Launching Cadence and enabling a provider no longer request a password. Use the dashboard Refresh button or Settings → Retry when you want to authorize access.
+- Cursor prompt permission is passed to each refresh directly, so another refresh cannot change an in-flight request's policy.
+
 ## 1.4.1 — 2026-10-28
 
 ### Changed

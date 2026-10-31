@@ -88,14 +88,14 @@ final class AppModel: ObservableObject {
     private var consecutiveFailures = 0
     private var backoffUntil: Date?
     private let demo: Bool
-    private let tokenLoader: () async throws -> String
+    private let tokenLoader: (Bool) async throws -> String
     private let monthlyLoader: (String) async throws -> [Quota]
     private let grokLoader: (String) async throws -> Quota
     private let codexLoader: () async throws -> [Quota]
     private let claudeLoader: (Bool) async throws -> [Quota]
 
     init(demo: Bool = false, defaults: UserDefaults? = nil,
-         tokenLoader: @escaping () async throws -> String = { try await Authentication.automaticToken() },
+         tokenLoader: @escaping (Bool) async throws -> String = { try await Authentication.automaticToken(allowPrompt: $0) },
          monthlyLoader: @escaping (String) async throws -> [Quota] = { try UsageParser.monthly(await CursorAPI.fetch("GetCurrentPeriodUsage", token: $0)) },
          grokLoader: @escaping (String) async throws -> Quota = { try UsageParser.grok(await CursorAPI.fetch("GetSandUsageStatus", token: $0)) },
          codexLoader: @escaping () async throws -> [Quota] = { try await CodexUsage.fetch() },
@@ -201,10 +201,9 @@ final class AppModel: ObservableObject {
         grokRefreshing = false
     }
 
-    /// Refresh. Retry, the refresh button, and launch may ask for the Mac
-    /// login password. The timer, wake, and opening the menu pass
-    /// `allowKeychainPrompt: false` so a dismissed dialog stays dismissed.
-    func refresh(allowKeychainPrompt: Bool = true) {
+    /// All refreshes are silent by default, including launch and provider
+    /// toggles. Only an explicit Refresh or Retry action permits Keychain UI.
+    func refresh(allowKeychainPrompt: Bool = false) {
         guard !demo else {
             recordDailySnapshots(for: monthly + (grok.map { [$0] } ?? []) + codex + claude)
             onDisplayChange?()
@@ -215,13 +214,12 @@ final class AppModel: ObservableObject {
         guard showCursor else { onDisplayChange?(); return }
         // Debounce concurrent token loads; fetch tasks debounce individually below.
         guard tokenTask == nil else { onDisplayChange?(); return }
-        Authentication.promptsAllowed = allowKeychainPrompt
         tokenLoading = true
         onDisplayChange?()
         let current = generation
         tokenTask = Task {
             let tokenResult: Result<String, Error>
-            do { tokenResult = .success(try await tokenLoader()) }
+            do { tokenResult = .success(try await tokenLoader(allowKeychainPrompt)) }
             catch { tokenResult = .failure(error) }
             guard generation == current, !Task.isCancelled else { return }
             tokenTask = nil
@@ -270,7 +268,7 @@ final class AppModel: ObservableObject {
     /// `respectBackoff` is set by automatic refreshes so Claude is checked at
     /// most every `ClaudeUsage.checkInterval` (longer after failures); Retry
     /// bypasses it.
-    func refreshClaude(allowKeychainPrompt: Bool = true, respectBackoff: Bool = false) {
+    func refreshClaude(allowKeychainPrompt: Bool = false, respectBackoff: Bool = false) {
         guard showClaude, !demo, claudeTask == nil else { return }
         if respectBackoff, let until = claudeNextCheck, Date() < until { return }
         claudeRefreshing = true

@@ -1,5 +1,4 @@
 import Foundation
-import LocalAuthentication
 import Security
 
 /// Reads Claude plan limits (5-hour session and weekly) for the account
@@ -32,16 +31,13 @@ enum ClaudeUsage {
     /// for attributes only and forbids UI, so detection never shows a dialog.
     static func isInstalled() -> Bool {
         if FileManager.default.fileExists(atPath: credentialsFile()) { return true }
-        let context = LAContext()
-        context.interactionNotAllowed = true
         let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecReturnAttributes as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
-            kSecUseAuthenticationContext as String: context,
         ]
-        let status = SecItemCopyMatching(query as CFDictionary, nil)
+        let status = KeychainReader.copyMatching(query, allowPrompt: false, result: nil)
         return status == errSecSuccess || status == errSecInteractionNotAllowed || status == errSecAuthFailed
     }
 
@@ -70,25 +66,14 @@ enum ClaudeUsage {
     }
 
     private static func keychainData(prompt: Bool) -> KeychainResult {
-        // Keychain UI belongs on the main thread, like the Cursor lookup.
-        if Thread.isMainThread { return keychainDataOnThisThread(prompt: prompt) }
-        return DispatchQueue.main.sync { keychainDataOnThisThread(prompt: prompt) }
-    }
-
-    private static func keychainDataOnThisThread(prompt: Bool) -> KeychainResult {
-        var query: [String: Any] = [
+        let query: [String: Any] = [
             kSecClass as String: kSecClassGenericPassword,
             kSecAttrService as String: keychainService,
             kSecReturnData as String: true,
             kSecMatchLimit as String: kSecMatchLimitOne,
         ]
-        if !prompt {
-            let context = LAContext()
-            context.interactionNotAllowed = true
-            query[kSecUseAuthenticationContext as String] = context
-        }
         var item: CFTypeRef?
-        switch SecItemCopyMatching(query as CFDictionary, &item) {
+        switch KeychainReader.copyMatching(query, allowPrompt: prompt, result: &item) {
         case errSecSuccess:
             guard let data = item as? Data, !data.isEmpty else { return .missing }
             return .data(data)
@@ -117,7 +102,7 @@ enum ClaudeUsage {
         // failure better than an expired file.
         switch keychain {
         case .needsPrompt:
-            throw UsageError.message("Press Retry to let Cadence read Claude Code’s sign-in from the keychain.")
+            throw UsageError.message("Click Refresh or Settings → Retry to let Cadence read Claude Code’s sign-in. Background checks will not ask for your password.")
         case .cancelled:
             throw UsageError.message("Cadence was not allowed to read Claude Code’s sign-in. Press Retry and choose Always Allow.")
         default: break

@@ -30,7 +30,9 @@ struct ModelTests {
         var token = "account-a"
         var authFailure = false
         var requestedTokens: [String] = []
-        let model = AppModel(defaults: defaults, tokenLoader: {
+        var cursorPrompts: [Bool] = []
+        let model = AppModel(defaults: defaults, tokenLoader: { prompt in
+            cursorPrompts.append(prompt)
             if authFailure { throw UsageError.message("Sign in to Cursor") }
             return token
         },
@@ -41,6 +43,7 @@ struct ModelTests {
         model.refresh()
         precondition(model.syncStatus() == .fetching, "Fetching status")
         await wait { monthly.count == 1 }
+        precondition(cursorPrompts == [false], "Launch refresh does not permit Cursor password dialogs")
         precondition(monthly.count == 1, "Monthly starts")
         precondition(grok.count == 0, "Hidden Grok must not make requests")
         let now = Date()
@@ -57,8 +60,9 @@ struct ModelTests {
         await wait { !model.monthlyRefreshing }
         precondition(model.monthlyError == "Monthly unavailable" && model.monthly.count == 1, "Same-account failure retains balances")
         precondition(model.grokRefreshing, "Monthly failure publishes before slow Grok")
-        model.refresh()
+        model.refresh(allowKeychainPrompt: true)
         await wait { monthly.count == 1 }
+        precondition(cursorPrompts.last == true, "Explicit Retry permits Cursor Keychain access")
         precondition(grok.count == 1, "Retry monthly while Grok pending without duplicate Grok request")
         monthly.complete(.success([quota]))
         await wait { !model.monthlyRefreshing }
@@ -140,9 +144,9 @@ struct ModelTests {
         await wait { !model.refreshing }
         // DisplayMode falls back to .both for corrupt stored values.
         defaults.set("corrupt-value", forKey: "displayMode")
-        let fallback = AppModel(defaults: defaults, tokenLoader: { "x" })
+        let fallback = AppModel(defaults: defaults, tokenLoader: { _ in "x" })
         precondition(fallback.displayMode == .both, "Corrupt displayMode falls back to both")
-        let demo = AppModel(demo: true, defaults: defaults, tokenLoader: { preconditionFailure("Demo must not authenticate") })
+        let demo = AppModel(demo: true, defaults: defaults, tokenLoader: { _ in preconditionFailure("Demo must not authenticate") })
         demo.refresh()
         precondition(demo.syncStatus() == .demo, "Demo status does not claim a live connection")
         // Fixed morning budget persists across restarts and holds steady intraday.
@@ -151,7 +155,7 @@ struct ModelTests {
         defer { dailyDefaults.removePersistentDomain(forName: dailySuite) }
         var calendar = Calendar(identifier: .gregorian)
         calendar.timeZone = TimeZone(secondsFromGMT: 0)!
-        let dayModel = AppModel(defaults: dailyDefaults, tokenLoader: { "x" })
+        let dayModel = AppModel(defaults: dailyDefaults, tokenLoader: { _ in "x" })
         let dayStart = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 8))!
         let dayAfternoon = calendar.date(from: DateComponents(year: 2026, month: 9, day: 17, hour: 18))!
         let dayNext = calendar.date(from: DateComponents(year: 2026, month: 9, day: 18, hour: 8))!
@@ -166,7 +170,7 @@ struct ModelTests {
         precondition(abs((afternoonInfo.budget ?? -1) - 3.5) < 0.000001, "Intraday budget holds steady")
         precondition(abs(afternoonInfo.usedToday - 2.1) < 0.000001 && abs((afternoonInfo.available ?? -1) - 1.4) < 0.000001, "Intraday spend tracks morning baseline")
         // Reload survives restarts via UserDefaults.
-        let reloaded = AppModel(defaults: dailyDefaults, tokenLoader: { "x" })
+        let reloaded = AppModel(defaults: dailyDefaults, tokenLoader: { _ in "x" })
         let reloadedInfo = reloaded.dailyInfo(for: dayAfternoonQuota, at: dayAfternoon, calendar: calendar)
         precondition(abs((reloadedInfo.budget ?? -1) - 3.5) < 0.000001, "Budget survives restart")
         // Next morning redistributes from fresh remaining.
@@ -181,7 +185,7 @@ struct ModelTests {
         codexDefaults.set(false, forKey: "showClaude")
         codexDefaults.set(false, forKey: "showCursor")
         let codexPending = Pending<[Quota]>()
-        let codexModel = AppModel(defaults: codexDefaults, tokenLoader: { preconditionFailure("Disabled Cursor must not authenticate") },
+        let codexModel = AppModel(defaults: codexDefaults, tokenLoader: { _ in preconditionFailure("Disabled Cursor must not authenticate") },
                                   codexLoader: { try await codexPending.load() })
         codexModel.refresh()
         await wait { codexPending.count == 1 }
@@ -221,7 +225,7 @@ struct ModelTests {
         let shortLaterInfo = codexModel.dailyInfo(for: shortLater)
         precondition(shortLaterInfo.budget == shortBudget && abs(shortLaterInfo.usedToday - 3.5) < 0.000001,
                      "Short-window usage grows against the fixed budget, not a shrinking estimate")
-        let reloadedCodex = AppModel(defaults: codexDefaults, tokenLoader: { "unused" }, codexLoader: { [] })
+        let reloadedCodex = AppModel(defaults: codexDefaults, tokenLoader: { _ in "unused" }, codexLoader: { [] })
         precondition(reloadedCodex.dailyAnchors["codex-primary"] != nil && !reloadedCodex.showCursor,
                      "Codex baseline and disabled Cursor survive restart")
         codexModel.showCodex = false
@@ -237,11 +241,11 @@ struct ModelTests {
         claudeDefaults.set(false, forKey: "showCodex")
         let claudePending = Pending<[Quota]>()
         var claudePrompts: [Bool] = []
-        let claudeModel = AppModel(defaults: claudeDefaults, tokenLoader: { preconditionFailure("Disabled Cursor must not authenticate") },
+        let claudeModel = AppModel(defaults: claudeDefaults, tokenLoader: { _ in preconditionFailure("Disabled Cursor must not authenticate") },
                                    claudeLoader: { prompt in claudePrompts.append(prompt); return try await claudePending.load() })
         claudeModel.refresh()
         await wait { claudePending.count == 1 }
-        precondition(claudeModel.claudeRefreshing && claudePrompts == [true], "Claude refresh is independent and may prompt on manual refresh")
+        precondition(claudeModel.claudeRefreshing && claudePrompts == [false], "Launch refresh is independent and never prompts for Claude")
         let claudeNow = Date()
         let session = Quota(id: "claude-five_hour", name: "Claude · 5 hours", used: 25,
                             reset: claudeNow.addingTimeInterval(3 * 3600), updated: claudeNow, windowMinutes: 300)
@@ -260,14 +264,15 @@ struct ModelTests {
         await wait { claudePending.count == 1 }
         claudePending.complete(.failure(ClaudeUsage.RateLimited(retryAfter: nil)))
         await wait { !claudeModel.claudeRefreshing }
-        precondition(claudePrompts == [true, false] && claudeModel.syncStatus() == .unavailable && claudeModel.hasProblem,
+        precondition(claudePrompts == [false, false] && claudeModel.syncStatus() == .unavailable && claudeModel.hasProblem,
                      "Claude failure is surfaced and automatic refreshes never prompt")
         claudeModel.refreshIfDue()
         precondition(!claudeModel.claudeRefreshing && claudePrompts.count == 2, "Automatic refresh waits out Claude backoff")
-        claudeModel.refresh()
+        claudeModel.refresh(allowKeychainPrompt: true)
         await wait { claudePending.count == 1 }
         claudePending.complete(.success([session]))
         await wait { !claudeModel.claudeRefreshing }
+        precondition(claudePrompts == [false, false, true], "Only explicit Retry permits Claude password dialogs")
         precondition(claudeModel.claudeError == nil && claudeModel.claude.count == 1, "Manual refresh bypasses backoff and clears the error")
         claudeModel.showClaude = false
         precondition(claudeModel.claude.isEmpty && !claudeModel.toolbarTitle.contains("Cl"), "Hiding Claude clears its display")

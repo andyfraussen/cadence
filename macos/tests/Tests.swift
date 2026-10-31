@@ -1,4 +1,6 @@
 import Foundation
+import LocalAuthentication
+import Security
 import SQLite3
 
 @main
@@ -17,6 +19,7 @@ struct Tests {
                 preconditionFailure("Invalid quota was accepted")
             } catch { assertions += 1 }
         }
+        checkKeychainInteraction()
         let iso = ISO8601DateFormatter()
         for (start, end, zone, weekdays, days) in [
             ("2026-09-13T12:00:00Z", "2026-09-14T12:00:00Z", "UTC", 1, 2),
@@ -358,7 +361,7 @@ struct Tests {
         try checkSealedSession()
         print("Passed \(assertions) parser and pacing checks.")
         if CommandLine.arguments.contains("--live") {
-            let token = try await Authentication.automaticToken()
+            let token = try await Authentication.automaticToken(allowPrompt: true)
             let liveMonthly = try UsageParser.monthly(await CursorAPI.fetch("GetCurrentPeriodUsage", token: token))
             let liveGrok = try UsageParser.grok(await CursorAPI.fetch("GetSandUsageStatus", token: token))
             for quota in liveMonthly + [liveGrok] {
@@ -373,6 +376,30 @@ struct Tests {
             }
             print("Live Codex app-server check passed. No credentials printed or persisted.")
         }
+    }
+
+    /// Observe the actual process-wide Security setting without reading,
+    /// creating, unlocking, or modifying any of the user's Keychain items.
+    static func checkKeychainInteraction() {
+        func interactionAllowed() -> Bool {
+            var allowed = DarwinBoolean(false)
+            precondition(SecKeychainGetUserInteractionAllowed(&allowed) == errSecSuccess)
+            return allowed.boolValue
+        }
+        let original = interactionAllowed()
+        let status = KeychainReader.withInteraction(allowed: false) { context in
+            precondition(context.interactionNotAllowed, "Data-protection Keychain UI is disabled")
+            precondition(!interactionAllowed(), "Legacy login Keychain UI is disabled")
+            let nested = KeychainReader.withInteraction(allowed: true) { context in
+                precondition(!context.interactionNotAllowed && interactionAllowed(), "An explicit retry permits UI")
+                return errSecUserCanceled
+            }
+            precondition(nested == errSecUserCanceled && !interactionAllowed(), "Cancellation restores the outer policy")
+            return errSecInteractionNotAllowed
+        }
+        precondition(status == errSecInteractionNotAllowed, "The protected read's error is preserved")
+        precondition(interactionAllowed() == original, "Failed reads restore the original process policy")
+        print("Passed Keychain interaction policy checks without accessing credentials.")
     }
 
     /// Temporary SQLite fixture: verifies readToken against a real database file

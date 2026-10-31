@@ -51,8 +51,8 @@ struct DashboardView: View {
                     Text(statusLine.0).font(.system(size: 12)).foregroundStyle(statusLine.1)
                 }
                 Spacer()
-                Button { model.refresh() } label: { Image(systemName: "arrow.clockwise") }
-                    .help("Refresh Cadence").accessibilityLabel("Refresh Cadence")
+                Button { model.refresh(allowKeychainPrompt: true) } label: { Image(systemName: "arrow.clockwise") }
+                    .help("Refresh Cadence; macOS may ask for Keychain access").accessibilityLabel("Refresh Cadence")
             }
             ScrollView(.vertical) {
               VStack(alignment: .leading, spacing: 12) {
@@ -490,7 +490,7 @@ struct SettingsView: View {
                     .foregroundStyle(.secondary)
                     .help(model.monthlyError ?? (model.showGrok ? model.grokError : nil) ?? status.rawValue)
                     Spacer()
-                    Button("Retry") { model.refresh() }
+                    Button("Retry") { model.refresh(allowKeychainPrompt: true) }
                     Button("Done") { NSApp.keyWindow?.close() }
                         .keyboardShortcut(.defaultAction)
                 }

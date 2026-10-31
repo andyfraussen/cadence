@@ -1,6 +1,6 @@
 {
   "name": "cadence",
-  "version": "1.4.1",
+  "version": "1.4.2",
   "description": "Menu bar quota monitor for Cursor, Codex, and Claude",
   "type": "module",
   "scripts": {
