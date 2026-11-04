@@ -180,7 +180,7 @@ struct Tests {
 
         let pastQuota = Quota(id: "G", name: "Grok", used: 10, reset: now.addingTimeInterval(-10), updated: now)
         check(pastQuota.resetRemainingText(at: now, calendar: calendar) == "0 days left", "Past reset returns 0 days left")
-        check(pastQuota.resetRemainingText(at: now, workdaysOnly: true, calendar: calendar) == "0 weekdays left", "Past reset returns 0 weekdays left")
+        check(pastQuota.resetRemainingText(at: now, workdaysOnly: true, calendar: calendar) == "0 days left", "Expired countdown is independent of weekday pacing")
 
         let tomorrowMidnight = midnight.addingTimeInterval(86400)
         let oneDayQuota = Quota(id: "C", name: "Cursor", used: 10, reset: tomorrowMidnight, updated: now)
@@ -195,7 +195,15 @@ struct Tests {
         check(almostDayQuota.resetRemainingText(at: now, calendar: calendar) == "24 hours left", "Sub-day duration rounds up to the nearest minute")
         check(oneDayQuota.resetRemainingText(at: midnight, calendar: calendar) == "1 day left", "Exactly 24 hours retains day format")
         check(fullDays.resetRemainingText(at: midnight, calendar: calendar) == "20 days left", "Multi-day plural")
-        check(fullWeek.resetRemainingText(at: midnight, workdaysOnly: true, calendar: calendar) == "5 weekdays left", "Multi-weekday plural")
+        check(fullWeek.resetRemainingText(at: midnight, workdaysOnly: true, calendar: calendar) == "7 days left", "Countdown includes weekends even with weekday pacing")
+
+        let weeklyQuota = Quota(id: "W", name: "Weekly", used: 18, reset: now.addingTimeInterval(7 * 86400), updated: now)
+        check(weeklyQuota.daysLeft(at: now, calendar: calendar) == 8, "Weekly pacing includes partial dates at both ends")
+        check(weeklyQuota.resetRemainingText(at: now, calendar: calendar) == "7 days left", "Seven-day countdown must not show eight days")
+        let nearlyWeeklyQuota = Quota(id: "W", name: "Weekly", used: 18, reset: now.addingTimeInterval(6 * 86400 + 23 * 3600), updated: now)
+        check(nearlyWeeklyQuota.resetRemainingText(at: now, calendar: calendar) == "6 days and 23 hours left", "Partial days show elapsed days and hours")
+        let dayAndHourQuota = Quota(id: "W", name: "Weekly", used: 18, reset: now.addingTimeInterval(25 * 3600), updated: now)
+        check(dayAndHourQuota.resetRemainingText(at: now, calendar: calendar) == "1 day and 1 hour left", "Day and hour singulars")
 
         // Fixed morning budget: stable all day, redistributes tomorrow.
         // Spec example: 2.1% used / 3.5% budget leaves 1.4% available;

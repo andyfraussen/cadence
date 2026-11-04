@@ -114,11 +114,9 @@ struct Quota: Identifiable {
         return DailyBudgetInfo(budget: budget, usedToday: used)
     }
 
-    func resetRemainingText(at now: Date = Date(), workdaysOnly: Bool = false, calendar: Calendar = .current) -> String {
-        guard reset > now else {
-            let unit = workdaysOnly ? "weekdays left" : "days left"
-            return "0 \(unit)"
-        }
+    // Countdown measures elapsed time, independently of calendar-day budget pacing.
+    func resetRemainingText(at now: Date = Date(), workdaysOnly _: Bool = false, calendar _: Calendar = .current) -> String {
+        guard reset > now else { return "0 days left" }
         // Use elapsed time, not calendar dates: tomorrow can be only hours away.
         let diff = reset.timeIntervalSince(now)
         if diff < 24 * 3600 {
@@ -140,11 +138,15 @@ struct Quota: Identifiable {
                 return "\(totalMinutes) \(mUnit) left"
             }
         }
-        let days = daysLeft(at: now, workdaysOnly: workdaysOnly, calendar: calendar)
-        let unit = workdaysOnly
-            ? (days == 1 ? "weekday left" : "weekdays left")
-            : (days == 1 ? "day left" : "days left")
-        return "\(days) \(unit)"
+        let totalHours = Int(floor(diff / 3600))
+        let days = totalHours / 24
+        let hours = totalHours % 24
+        let dayUnit = days == 1 ? "day" : "days"
+        if hours > 0 {
+            let hourUnit = hours == 1 ? "hour" : "hours"
+            return "\(days) \(dayUnit) and \(hours) \(hourUnit) left"
+        }
+        return "\(days) \(dayUnit) left"
     }
 }
 
