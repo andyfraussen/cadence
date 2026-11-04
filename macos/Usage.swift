@@ -119,8 +119,9 @@ struct Quota: Identifiable {
             let unit = workdaysOnly ? "weekdays left" : "days left"
             return "0 \(unit)"
         }
-        if calendar.isDate(now, inSameDayAs: reset) {
-            let diff = reset.timeIntervalSince(now)
+        // Use elapsed time, not calendar dates: tomorrow can be only hours away.
+        let diff = reset.timeIntervalSince(now)
+        if diff < 24 * 3600 {
             if diff < 60 {
                 return "< 1 minute left"
             }

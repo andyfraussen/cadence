@@ -155,7 +155,7 @@ struct Tests {
         check((try? Authentication.cleanToken("\"abc123\"")) == "abc123", "JSON-quoted token is unwrapped")
         do { _ = try Authentication.cleanToken("   "); preconditionFailure("Blank token was accepted") } catch { assertions += 1 }
         do { _ = try Authentication.cleanToken("\"\""); preconditionFailure("Empty quoted token was accepted") } catch { assertions += 1 }
-        // Remaining time formatting: same-day hours/minutes and multi-day pluralization
+        // Remaining time formatting: sub-24-hour durations and multi-day pluralization
         let sameDayQuota = Quota(id: "G", name: "Grok", used: 63.1, reset: now.addingTimeInterval(4 * 3600 + 33 * 60 + 15), updated: now)
         check(sameDayQuota.resetRemainingText(at: now, calendar: calendar) == "4 hours and 34 minutes left", "Same-day hours and minutes")
         check(sameDayQuota.resetRemainingText(at: now, workdaysOnly: true, calendar: calendar) == "4 hours and 34 minutes left", "Same-day respects hour format with workdaysOnly")
@@ -184,7 +184,16 @@ struct Tests {
 
         let tomorrowMidnight = midnight.addingTimeInterval(86400)
         let oneDayQuota = Quota(id: "C", name: "Cursor", used: 10, reset: tomorrowMidnight, updated: now)
-        check(oneDayQuota.resetRemainingText(at: now, calendar: calendar) == "1 day left", "1 day singular")
+        check(oneDayQuota.resetRemainingText(at: now, calendar: calendar) == "12 hours left", "Midnight reset uses elapsed hours")
+
+        let tomorrowQuota = Quota(id: "C", name: "Cursor", used: 10, reset: now.addingTimeInterval(23 * 3600 + 30 * 60), updated: now)
+        check(tomorrowQuota.daysLeft(at: now, calendar: calendar) == 2, "Pacing still counts both overlapping dates")
+        check(tomorrowQuota.resetRemainingText(at: now, calendar: calendar) == "23 hours and 30 minutes left", "Tomorrow under 24 hours uses hours and minutes")
+        check(tomorrowQuota.resetRemainingText(at: now, workdaysOnly: true, calendar: calendar) == "23 hours and 30 minutes left", "Weekday pacing does not affect sub-day countdown")
+
+        let almostDayQuota = Quota(id: "C", name: "Cursor", used: 10, reset: now.addingTimeInterval(86400 - 1), updated: now)
+        check(almostDayQuota.resetRemainingText(at: now, calendar: calendar) == "24 hours left", "Sub-day duration rounds up to the nearest minute")
+        check(oneDayQuota.resetRemainingText(at: midnight, calendar: calendar) == "1 day left", "Exactly 24 hours retains day format")
         check(fullDays.resetRemainingText(at: midnight, calendar: calendar) == "20 days left", "Multi-day plural")
         check(fullWeek.resetRemainingText(at: midnight, workdaysOnly: true, calendar: calendar) == "5 weekdays left", "Multi-weekday plural")
 
