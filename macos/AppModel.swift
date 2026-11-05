@@ -427,6 +427,49 @@ final class AppModel: ObservableObject {
         if showClaude { pieces.append(claude.first.map { String(format: "Cl %.0f%%", $0.remaining) } ?? "Cl —") }
         return (pieces.isEmpty ? "Cadence" : pieces.joined(separator: " · ")) + (hasProblem ? " !" : "")
     }
+    func widgetSnapshot(at now: Date = Date()) -> WidgetSnapshot {
+        WidgetSnapshot(updatedAt: now, services: [
+            widgetService(id: "cursor", name: "Cursor", enabled: showCursor, quotas: monthly, error: monthlyError, at: now),
+            widgetService(id: "codex", name: "Codex", enabled: showCodex, quotas: codex, error: codexError, at: now),
+            widgetService(id: "claude", name: "Claude", enabled: showClaude, quotas: claude, error: claudeError, at: now),
+            widgetService(id: "grok", name: "Grok", enabled: showCursor && showGrok, quotas: grok.map { [$0] } ?? [], error: showGrok ? grokError : nil, hiddenName: showCursor ? "Grok" : "Cursor", at: now)
+        ])
+    }
+
+    private func widgetService(id: String, name: String, enabled: Bool, quotas: [Quota], error: String?, hiddenName: String? = nil, at now: Date) -> WidgetService {
+        guard enabled else {
+            return WidgetService(id: id, name: name, enabled: false, message: "Turn on \(hiddenName ?? name) in Cadence", pools: [])
+        }
+        var pools = quotas.map { widgetPool($0, at: now) }
+        if error != nil {
+            pools = pools.map { pool in
+                var copy = pool
+                copy.stale = true
+                copy.mood = .stale
+                return copy
+            }
+        }
+        let message = pools.isEmpty ? (error ?? "Waiting for Cadence") : nil
+        return WidgetService(id: id, name: name, enabled: true, message: message, pools: pools)
+    }
+
+    private func widgetPool(_ quota: Quota, at now: Date) -> WidgetPool {
+        let info = dailyInfo(for: quota, at: now)
+        let stale = quota.isStale(at: now)
+        let short = quota.name.split(separator: "·").last.map { $0.trimmingCharacters(in: .whitespaces) } ?? quota.name
+        return WidgetPool(
+            id: quota.id,
+            name: short,
+            remaining: quota.remaining,
+            reset: quota.reset,
+            resetText: quota.resetRemainingText(at: now),
+            stale: stale,
+            usedToday: info.budget == nil ? nil : info.usedToday,
+            budget: info.budget,
+            mood: WidgetSnapshot.mood(stale: stale, remaining: quota.remaining, usedToday: info.usedToday, budget: info.budget)
+        )
+    }
+
     var hasProblem: Bool {
         (showCursor && (monthlyError != nil || monthly.contains(where: { $0.isStale() }) ||
                         (showGrok && (grokError != nil || grok?.isStale() == true)))) ||

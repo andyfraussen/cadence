@@ -374,6 +374,17 @@ struct Tests {
         let shiftedAnchor = DailyPacing.nextAnchor(for: shiftedCycle, now: afternoon, existing: exactA, calendar: calendar)
         check(shiftedAnchor.startUsed == 31, "Cursor reset shifts still start a fresh baseline")
 
+        let calm = WidgetPool(id: "soon", name: "5 hours", remaining: 80, reset: now.addingTimeInterval(3600), resetText: "1 hour left", stale: false, usedToday: 1, budget: 10, mood: .calm)
+        let over = WidgetPool(id: "over", name: "Weekly", remaining: 40, reset: now.addingTimeInterval(86400), resetText: "1 day left", stale: false, usedToday: 9, budget: 4, mood: .over)
+        check(WidgetSnapshot.featured([calm, over])?.id == "over", "Over-budget pool is the small widget")
+        check(WidgetSnapshot.featured([calm])?.id == "soon", "A single calm pool is featured")
+        check(WidgetSnapshot.mood(stale: false, remaining: 80, usedToday: 8.1, budget: 10) == .warning, "80 percent of today's budget warns")
+        check(WidgetSnapshot.mood(stale: true, remaining: 80, usedToday: 1, budget: 10) == .stale, "Stale readings stay stale")
+        let roundTrip = WidgetSnapshot(updatedAt: now, services: [WidgetService(id: "grok", name: "Grok", enabled: true, message: nil, pools: [calm])])
+        let encoded = try WidgetCoding.encoder().encode(roundTrip)
+        let decoded = try WidgetCoding.decoder().decode(WidgetSnapshot.self, from: encoded)
+        check(decoded == roundTrip, "Widget snapshot round-trips")
+
         try checkSQLiteFixture()
         try checkSealedSession()
         print("Passed \(assertions) parser and pacing checks.")

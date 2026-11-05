@@ -1,6 +1,7 @@
 import AppKit
 import Network
 import SwiftUI
+import WidgetKit
 
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
@@ -23,7 +24,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         popover.behavior = .transient
         popover.delegate = self
         configurePopover()
-        model.onDisplayChange = { [weak self] in self?.updateMenuBar() }
+        model.onDisplayChange = { [weak self] in
+            self?.updateMenuBar()
+            self?.publishWidgets()
+        }
         updateMenuBar()
         model.refresh()
         let timer = Timer(timeInterval: 60, repeats: true) { [weak self] _ in
@@ -90,12 +94,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSPopoverDelegate {
         configurePopover()
     }
 
+    private var lastWidgetJSON: Data?
+
+    private func publishWidgets() {
+        let snapshot = model.widgetSnapshot()
+        guard let data = try? WidgetCoding.encoder().encode(snapshot), data != lastWidgetJSON else { return }
+        do {
+            try WidgetStore.write(snapshot)
+            lastWidgetJSON = data
+            WidgetCenter.shared.reloadAllTimelines()
+        } catch { return }
+        Task.detached(priority: .utility) {
+            guard CodeyFrames.installIfNeeded() else { return }
+            await MainActor.run { WidgetCenter.shared.reloadAllTimelines() }
+        }
+    }
+
     @objc private func togglePopover() {
         if popover.isShown { closePopover() }
         else if let button = item.button { showPopover(from: button) }
     }
     @objc private func woke() { updateMenuBar(); model.refresh(allowKeychainPrompt: false) }
     @objc private func appResignedActive() { closePopover() }
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        NSApp.activate(ignoringOtherApps: true)
+        if let button = item.button { showPopover(from: button) }
+    }
 
     func applicationWillTerminate(_ notification: Notification) {
         stopPopoverMonitors()
